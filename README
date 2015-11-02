@@ -24,7 +24,7 @@ The other technique is "lookahead" in which the encoder exhaustively
 searches ahead to find the optimum coding sequence based on future samples.
 This process can reduce the quantization noise from about 1 to 6 dB (depending
 on the source) and also reduces or eliminates the harmonic content in the
-noise that sometimes plagues ADPCM. Unfortunately, at it's maximum settings
+noise that sometimes plagues ADPCM. Unfortunately, at its maximum settings
 this can be very slow, but this should be relatively irrelevant if the
 encoder is being used to generate canned samples.
 
@@ -54,4 +54,6 @@ Bugs:
    because it needs improved trellis pruning. However the default level 3
    should always be fine and then the user can simply try increasing levels
    until the time becomes untenable.
+
+4. Pipes are not yet supported.
 
