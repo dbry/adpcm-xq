@@ -14,8 +14,8 @@
 #include "adpcm-lib.h"
 
 static const char *sign_on = "\n"
-" ADPCM-XQ   Xtreme Quality IMA-ADPCM WAV Encoder / Decoder   Version 0.2\n"
-" Copyright (c) 2015 David Bryant. All Rights Reserved.\n\n";
+" ADPCM-XQ   Xtreme Quality IMA-ADPCM WAV Encoder / Decoder   Version 0.3\n"
+" Copyright (c) 2018 David Bryant. All Rights Reserved.\n\n";
 
 static const char *usage =
 " Usage:     ADPCM-XQ [-options] infile.wav outfile.wav\n\n"
@@ -23,6 +23,8 @@ static const char *usage =
 "          (either encode 16-bit PCM to 4-bit IMA-ADPCM or decode back)\n\n"
 " Options:  -[0-8] = encode lookahead samples (default = 3)\n"
 "           -bn    = override auto block size, 2^n bytes (n = 8-15)\n"
+"           -d     = decode only (fail on WAV file already PCM)\n"
+"           -e     = encode only (fail on WAV file already ADPCM)\n"
 "           -f     = encode flat noise (no dynamic noise shaping)\n"
 "           -h     = display this help message\n"
 "           -q     = quiet mode (display errors only)\n"
@@ -35,13 +37,17 @@ static const char *usage =
 #define ADPCM_FLAG_RAW_OUTPUT       0x2
 
 static int adpcm_converter (char *infilename, char *outfilename, int flags, int blocksize_pow2, int lookahead);
-static int verbosity = 0;
+static int verbosity = 0, decode_only = 0, encode_only = 0;
 
 int main (argc, argv) int argc; char **argv;
 {
     int lookahead = 3, flags = ADPCM_FLAG_NOISE_SHAPING, blocksize_pow2 = 0, overwrite = 0, asked_help = 0;
     char *infilename = NULL, *outfilename = NULL;
     FILE *outfile;
+
+    // if the name of the executable ends in "encoder" or "decoder", just do that function
+    encode_only = argc && strstr (argv [0], "encoder") && strlen (strstr (argv [0], "encoder")) == strlen ("encoder");
+    decode_only = argc && strstr (argv [0], "decoder") && strlen (strstr (argv [0], "decoder")) == strlen ("decoder");
 
     // loop through command-line arguments
 
@@ -69,6 +75,14 @@ int main (argc, argv) int argc; char **argv;
                         }
 
                         --*argv;
+                        break;
+
+                    case 'D': case 'd':
+                        decode_only = 1;
+                        break;
+
+                    case 'E': case 'e':
+                        encode_only = 1;
                         break;
 
                     case 'F': case 'f':
@@ -237,6 +251,11 @@ static int adpcm_converter (char *infilename, char *outfilename, int flags, int 
             if (WaveHeader.NumChannels < 1 || WaveHeader.NumChannels > 2)
                 supported = 0;
             else if (format == WAVE_FORMAT_PCM) {
+                if (decode_only) {
+                    fprintf (stderr, "\"%s\" is PCM .WAV file, invalid in decode-only mode!\n", infilename);
+                    return -1;
+                }
+
                 if (bits_per_sample < 9 || bits_per_sample > 16)
                     supported = 0;
 
@@ -244,6 +263,11 @@ static int adpcm_converter (char *infilename, char *outfilename, int flags, int 
                     supported = 0;
             }
             else if (format == WAVE_FORMAT_IMA_ADPCM) {
+                if (encode_only) {
+                    fprintf (stderr, "\"%s\" is ADPCM .WAV file, invalid in encode-only mode!\n", infilename);
+                    return -1;
+                }
+
                 if (bits_per_sample != 4)
                     supported = 0;
 
