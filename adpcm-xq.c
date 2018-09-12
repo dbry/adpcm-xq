@@ -113,14 +113,14 @@ int main (argc, argv) int argc; char **argv;
                         fprintf (stderr, "\nillegal option: %c !\n", **argv);
                         return 1;
                 }
-	else if (!infilename) {
+        else if (!infilename) {
             infilename = malloc (strlen (*argv) + 10);
             strcpy (infilename, *argv);
-	}
-	else if (!outfilename) {
+        }
+        else if (!outfilename) {
             outfilename = malloc (strlen (*argv) + 10);
             strcpy (outfilename, *argv);
-	}
+        }
         else {
             fprintf (stderr, "\nextra unknown argument: %s !\n", *argv);
             return 1;
@@ -133,6 +133,11 @@ int main (argc, argv) int argc; char **argv;
     if (!outfilename || asked_help) {
         printf ("%s", usage);
         return 0;
+    }
+
+    if (!strcmp (infilename, outfilename)) {
+        fprintf (stderr, "can't overwrite input file (specify different/new output file name)\n");
+        return -1;
     }
 
     if (!overwrite && (outfile = fopen (outfilename, "r"))) {
