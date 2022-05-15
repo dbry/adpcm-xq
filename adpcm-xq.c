@@ -321,6 +321,8 @@ static int adpcm_converter (char *infilename, char *outfilename, int flags, int 
                 return -1;
             }
 
+            little_endian_to_native (&fact_samples, "L");
+
             if (chunk_header.ckSize > 4) {
                 int bytes_to_skip = chunk_header.ckSize - 4;
                 char dummy;

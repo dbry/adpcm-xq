@@ -123,7 +123,7 @@ static double minimum_error (const struct adpcm_channel *pchan, int nch, int32_t
     int32_t delta = csample - pchan->pcmdata;
     struct adpcm_channel chan = *pchan;
     uint16_t step = step_table[chan.index];
-    int32_t trial_delta = (step >> 3);
+    uint16_t trial_delta = (step >> 3);
     int nibble, nibble2;
     double min_error;
 
@@ -139,9 +139,12 @@ static double minimum_error (const struct adpcm_channel *pchan, int nch, int32_t
     if (nibble & 1) trial_delta += (step >> 2);
     if (nibble & 2) trial_delta += (step >> 1);
     if (nibble & 4) trial_delta += step;
-    if (nibble & 8) trial_delta = -trial_delta;
 
-    chan.pcmdata += trial_delta;
+    if (nibble & 8)
+        chan.pcmdata -= trial_delta;
+    else
+        chan.pcmdata += trial_delta;
+
     CLIP(chan.pcmdata, -32768, 32767);
     if (best_nibble) *best_nibble = nibble;
     min_error = (double) (chan.pcmdata - csample) * (chan.pcmdata - csample);
@@ -166,9 +169,12 @@ static double minimum_error (const struct adpcm_channel *pchan, int nch, int32_t
         if (nibble2 & 1) trial_delta += (step >> 2);
         if (nibble2 & 2) trial_delta += (step >> 1);
         if (nibble2 & 4) trial_delta += step;
-        if (nibble2 & 8) trial_delta = -trial_delta;
 
-        chan.pcmdata += trial_delta;
+        if (nibble2 & 8)
+            chan.pcmdata -= trial_delta;
+        else
+            chan.pcmdata += trial_delta;
+
         CLIP(chan.pcmdata, -32768, 32767);
 
         error = (double) (chan.pcmdata - csample) * (chan.pcmdata - csample);
@@ -194,7 +200,7 @@ static uint8_t encode_sample (struct adpcm_context *pcnxt, int ch, const int16_t
     int32_t csample = *sample;
     int depth = num_samples - 1, nibble;
     uint16_t step = step_table[pchan->index];
-    int32_t trial_delta = (step >> 3);
+    uint16_t trial_delta = (step >> 3);
 
     if (pcnxt->noise_shaping == NOISE_SHAPING_DYNAMIC) {
         int32_t sam = (3 * pchan->history [0] - pchan->history [1]) >> 1;
@@ -229,9 +235,12 @@ static uint8_t encode_sample (struct adpcm_context *pcnxt, int ch, const int16_t
     if (nibble & 1) trial_delta += (step >> 2);
     if (nibble & 2) trial_delta += (step >> 1);
     if (nibble & 4) trial_delta += step;
-    if (nibble & 8) trial_delta = -trial_delta;
 
-    pchan->pcmdata += trial_delta;
+    if (nibble & 8)
+        pchan->pcmdata -= trial_delta;
+    else
+        pchan->pcmdata += trial_delta;
+
     pchan->index += index_table[nibble & 0x07];
     CLIP(pchan->index, 0, 88);
     CLIP(pchan->pcmdata, -32768, 32767);
@@ -360,15 +369,17 @@ int adpcm_decode_block (int16_t *outbuf, const uint8_t *inbuf, size_t inbufsize,
         for (ch = 0; ch < channels; ++ch) {
 
             for (i = 0; i < 4; ++i) {
-                uint16_t step = step_table [index [ch]];
-                int32_t delta = step >> 3;
+                uint16_t step = step_table [index [ch]], delta = step >> 3;
 
                 if (*inbuf & 1) delta += (step >> 2);
                 if (*inbuf & 2) delta += (step >> 1);
                 if (*inbuf & 4) delta += step;
-                if (*inbuf & 8) delta = -delta;
                 
-                pcmdata[ch] += delta;
+                if (*inbuf & 8)
+                    pcmdata[ch] -= delta;
+                else
+                    pcmdata[ch] += delta;
+
                 index[ch] += index_table [*inbuf & 0x7];
                 CLIP(index[ch], 0, 88);
                 CLIP(pcmdata[ch], -32768, 32767);
@@ -379,9 +390,12 @@ int adpcm_decode_block (int16_t *outbuf, const uint8_t *inbuf, size_t inbufsize,
                 if (*inbuf & 0x10) delta += (step >> 2);
                 if (*inbuf & 0x20) delta += (step >> 1);
                 if (*inbuf & 0x40) delta += step;
-                if (*inbuf & 0x80) delta = -delta;
+
+                if (*inbuf & 0x80)
+                    pcmdata[ch] -= delta;
+                else
+                    pcmdata[ch] += delta;
                 
-                pcmdata[ch] += delta;
                 index[ch] += index_table [(*inbuf >> 4) & 0x7];
                 CLIP(index[ch], 0, 88);
                 CLIP(pcmdata[ch], -32768, 32767);
