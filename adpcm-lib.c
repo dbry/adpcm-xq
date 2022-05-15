@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////
 //                           **** ADPCM-XQ ****                           //
 //                  Xtreme Quality ADPCM Encoder/Decoder                  //
-//                    Copyright (c) 2015 David Bryant.                    //
+//                    Copyright (c) 2022 David Bryant.                    //
 //                          All Rights Reserved.                          //
 //      Distributed under the BSD Software License (see license.txt)      //
 ////////////////////////////////////////////////////////////////////////////
@@ -122,8 +122,8 @@ static double minimum_error (const struct adpcm_channel *pchan, int nch, int32_t
 {
     int32_t delta = csample - pchan->pcmdata;
     struct adpcm_channel chan = *pchan;
-    int step = step_table[chan.index];
-    int trial_delta = (step >> 3);
+    uint16_t step = step_table[chan.index];
+    int32_t trial_delta = (step >> 3);
     int nibble, nibble2;
     double min_error;
 
@@ -193,8 +193,8 @@ static uint8_t encode_sample (struct adpcm_context *pcnxt, int ch, const int16_t
     struct adpcm_channel *pchan = pcnxt->channels + ch;
     int32_t csample = *sample;
     int depth = num_samples - 1, nibble;
-    int step = step_table[pchan->index];
-    int trial_delta = (step >> 3);
+    uint16_t step = step_table[pchan->index];
+    int32_t trial_delta = (step >> 3);
 
     if (pcnxt->noise_shaping == NOISE_SHAPING_DYNAMIC) {
         int32_t sam = (3 * pchan->history [0] - pchan->history [1]) >> 1;
@@ -360,7 +360,8 @@ int adpcm_decode_block (int16_t *outbuf, const uint8_t *inbuf, size_t inbufsize,
         for (ch = 0; ch < channels; ++ch) {
 
             for (i = 0; i < 4; ++i) {
-                int step = step_table [index [ch]], delta = step >> 3;
+                uint16_t step = step_table [index [ch]];
+                int32_t delta = step >> 3;
 
                 if (*inbuf & 1) delta += (step >> 2);
                 if (*inbuf & 2) delta += (step >> 1);
@@ -373,7 +374,7 @@ int adpcm_decode_block (int16_t *outbuf, const uint8_t *inbuf, size_t inbufsize,
                 CLIP(pcmdata[ch], -32768, 32767);
                 outbuf [i * 2 * channels] = pcmdata[ch];
 
-                step = step_table [index [ch]], delta = step >> 3;
+                step = step_table [index [ch]]; delta = step >> 3;
 
                 if (*inbuf & 0x10) delta += (step >> 2);
                 if (*inbuf & 0x20) delta += (step >> 1);

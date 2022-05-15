@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////
 //                           **** ADPCM-XQ ****                           //
 //                  Xtreme Quality ADPCM Encoder/Decoder                  //
-//                    Copyright (c) 2015 David Bryant.                    //
+//                    Copyright (c) 2022 David Bryant.                    //
 //                          All Rights Reserved.                          //
 //      Distributed under the BSD Software License (see license.txt)      //
 ////////////////////////////////////////////////////////////////////////////
@@ -13,9 +13,14 @@
 
 #include "adpcm-lib.h"
 
+// This runtime macro is not strictly needed because the code is endian-safe,
+// but including it improves performance on little-endian systems because we
+// can avoid a couple loops through the audio.
+#define IS_BIG_ENDIAN (*(uint16_t *)"\0\xff" < 0x0100)
+
 static const char *sign_on = "\n"
-" ADPCM-XQ   Xtreme Quality IMA-ADPCM WAV Encoder / Decoder   Version 0.3\n"
-" Copyright (c) 2018 David Bryant. All Rights Reserved.\n\n";
+" ADPCM-XQ   Xtreme Quality IMA-ADPCM WAV Encoder / Decoder   Version 0.4\n"
+" Copyright (c) 2022 David Bryant. All Rights Reserved.\n\n";
 
 static const char *usage =
 " Usage:     ADPCM-XQ [-options] infile.wav outfile.wav\n\n"
@@ -28,7 +33,7 @@ static const char *usage =
 "           -f     = encode flat noise (no dynamic noise shaping)\n"
 "           -h     = display this help message\n"
 "           -q     = quiet mode (display errors only)\n"
-"           -r     = raw output (no WAV header written)\n"
+"           -r     = raw output (little-endian, no WAV header written)\n"
 "           -v     = verbose (display lots of info)\n"
 "           -y     = overwrite outfile if it exists\n\n"
 " Web:       Visit www.github.com/dbry/adpcm-xq for latest version and info\n\n";
@@ -191,18 +196,17 @@ typedef struct {
 #define WAVE_FORMAT_IMA_ADPCM   0x11
 #define WAVE_FORMAT_EXTENSIBLE  0xfffe
 
-static int write_pcm_wav_header (FILE *outfile, int num_channels, size_t num_samples, int sample_rate);
-static int write_adpcm_wav_header (FILE *outfile, int num_channels, size_t num_samples, int sample_rate, int samples_per_block);
-static int adpcm_decode_data (FILE *infile, FILE *outfile, int num_channels, size_t num_samples, int block_size);
-static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, size_t num_samples, int samples_per_block, int lookahead, int noise_shaping);
+static int write_pcm_wav_header (FILE *outfile, int num_channels, uint32_t num_samples, uint32_t sample_rate);
+static int write_adpcm_wav_header (FILE *outfile, int num_channels, uint32_t num_samples, uint32_t sample_rate, int samples_per_block);
+static int adpcm_decode_data (FILE *infile, FILE *outfile, int num_channels, uint32_t num_samples, int block_size);
+static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, uint32_t num_samples, int samples_per_block, int lookahead, int noise_shaping);
 static void little_endian_to_native (void *data, char *format);
 static void native_to_little_endian (void *data, char *format);
 
 static int adpcm_converter (char *infilename, char *outfilename, int flags, int blocksize_pow2, int lookahead)
 {
-    int format = 0, res = 0, bits_per_sample, sample_rate, num_channels;
-    uint32_t fact_samples = 0;
-    size_t num_samples = 0;
+    int format = 0, res = 0, bits_per_sample, num_channels;
+    uint32_t fact_samples = 0, num_samples = 0, sample_rate;
     FILE *infile, *outfile;
     RiffChunkHeader riff_chunk_header;
     ChunkHeader chunk_header;
@@ -291,10 +295,10 @@ static int adpcm_converter (char *infilename, char *outfilename, int flags, int 
 
             if (verbosity > 0) {
                 fprintf (stderr, "format tag size = %d\n", chunk_header.ckSize);
-                fprintf (stderr, "FormatTag = 0x%x, NumChannels = %d, BitsPerSample = %d\n",
+                fprintf (stderr, "FormatTag = 0x%x, NumChannels = %u, BitsPerSample = %u\n",
                     WaveHeader.FormatTag, WaveHeader.NumChannels, WaveHeader.BitsPerSample);
-                fprintf (stderr, "BlockAlign = %d, SampleRate = %d, BytesPerSecond = %d\n",
-                    WaveHeader.BlockAlign, WaveHeader.SampleRate, WaveHeader.BytesPerSecond);
+                fprintf (stderr, "BlockAlign = %u, SampleRate = %lu, BytesPerSecond = %lu\n",
+                    WaveHeader.BlockAlign, (unsigned long) WaveHeader.SampleRate, (unsigned long) WaveHeader.BytesPerSecond);
 
                 if (chunk_header.ckSize > 16) {
                     if (format == WAVE_FORMAT_PCM)
@@ -351,7 +355,7 @@ static int adpcm_converter (char *infilename, char *outfilename, int flags, int 
                 num_samples = chunk_header.ckSize / WaveHeader.BlockAlign;
             }
             else {
-                int complete_blocks = chunk_header.ckSize / WaveHeader.BlockAlign;
+                uint32_t complete_blocks = chunk_header.ckSize / WaveHeader.BlockAlign;
                 int leftover_bytes = chunk_header.ckSize % WaveHeader.BlockAlign;
                 int samples_last_block;
 
@@ -457,7 +461,7 @@ static int adpcm_converter (char *infilename, char *outfilename, int flags, int 
     return res;
 }
 
-static int write_pcm_wav_header (FILE *outfile, int num_channels, size_t num_samples, int sample_rate)
+static int write_pcm_wav_header (FILE *outfile, int num_channels, uint32_t num_samples, uint32_t sample_rate)
 {
     RiffChunkHeader riffhdr;
     ChunkHeader datahdr, fmthdr;
@@ -465,7 +469,7 @@ static int write_pcm_wav_header (FILE *outfile, int num_channels, size_t num_sam
 
     int wavhdrsize = 16;
     int bytes_per_sample = 2;
-    size_t total_data_bytes = num_samples * bytes_per_sample * num_channels;
+    uint32_t total_data_bytes = num_samples * bytes_per_sample * num_channels;
 
     memset (&wavhdr, 0, sizeof (wavhdr));
 
@@ -498,7 +502,7 @@ static int write_pcm_wav_header (FILE *outfile, int num_channels, size_t num_sam
         fwrite (&datahdr, sizeof (datahdr), 1, outfile);
 }
 
-static int write_adpcm_wav_header (FILE *outfile, int num_channels, size_t num_samples, int sample_rate, int samples_per_block)
+static int write_adpcm_wav_header (FILE *outfile, int num_channels, uint32_t num_samples, uint32_t sample_rate, int samples_per_block)
 {
     RiffChunkHeader riffhdr;
     ChunkHeader datahdr, fmthdr;
@@ -507,9 +511,9 @@ static int write_adpcm_wav_header (FILE *outfile, int num_channels, size_t num_s
 
     int wavhdrsize = 20;
     int block_size = (samples_per_block - 1) / (num_channels ^ 3) + (num_channels * 4);
-    size_t num_blocks = num_samples / samples_per_block;
+    uint32_t num_blocks = num_samples / samples_per_block;
     int leftover_samples = num_samples % samples_per_block;
-    size_t total_data_bytes = num_blocks * block_size;
+    uint32_t total_data_bytes = num_blocks * block_size;
 
     if (leftover_samples) {
         int last_block_samples = ((leftover_samples + 6) & ~7) + 1;
@@ -555,12 +559,12 @@ static int write_adpcm_wav_header (FILE *outfile, int num_channels, size_t num_s
         fwrite (&datahdr, sizeof (datahdr), 1, outfile);
 }
 
-static int adpcm_decode_data (FILE *infile, FILE *outfile, int num_channels, size_t num_samples, int block_size)
+static int adpcm_decode_data (FILE *infile, FILE *outfile, int num_channels, uint32_t num_samples, int block_size)
 {
     int samples_per_block = (block_size - num_channels * 4) * (num_channels ^ 3) + 1, percent;
     void *pcm_block = malloc (samples_per_block * num_channels * 2);
     void *adpcm_block = malloc (block_size);
-    size_t progress_divider = 0;
+    uint32_t progress_divider = 0;
 
     if (!pcm_block || !adpcm_block) {
         fprintf (stderr, "could not allocate memory for buffers!\n");
@@ -593,6 +597,17 @@ static int adpcm_decode_data (FILE *infile, FILE *outfile, int num_channels, siz
             return -1;
         }
 
+        if (IS_BIG_ENDIAN) {
+            int scount = this_block_pcm_samples * num_channels;
+            unsigned char *cp = (unsigned char *) pcm_block;
+
+            while (scount--) {
+                int16_t temp = * (int16_t *) cp;
+                *cp++ = (unsigned char) temp;
+                *cp++ = (unsigned char) (temp >> 8);
+            }
+        }
+
         if (!fwrite (pcm_block, this_block_pcm_samples * num_channels * 2, 1, outfile)) {
             fprintf (stderr, "could not write all audio data to output file!\n");
             return -1;
@@ -618,12 +633,12 @@ static int adpcm_decode_data (FILE *infile, FILE *outfile, int num_channels, siz
     return 0;
 }
 
-static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, size_t num_samples, int samples_per_block, int lookahead, int noise_shaping)
+static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, uint32_t num_samples, int samples_per_block, int lookahead, int noise_shaping)
 {
     int block_size = (samples_per_block - 1) / (num_channels ^ 3) + (num_channels * 4), percent;
     int16_t *pcm_block = malloc (samples_per_block * num_channels * 2);
     void *adpcm_block = malloc (block_size);
-    size_t progress_divider = 0;
+    uint32_t progress_divider = 0;
     void *adpcm_cnxt = NULL;
 
     if (!pcm_block || !adpcm_block) {
@@ -651,6 +666,17 @@ static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, siz
         if (!fread (pcm_block, this_block_pcm_samples * num_channels * 2, 1, infile)) {
             fprintf (stderr, "\rcould not read all audio data from input file!\n");
             return -1;
+        }
+
+        if (IS_BIG_ENDIAN) {
+            int scount = this_block_pcm_samples * num_channels;
+            unsigned char *cp = (unsigned char *) pcm_block;
+
+            while (scount--) {
+                int16_t temp = cp [0] + (cp [1] << 8);
+                * (int16_t *) cp = temp;
+                cp += 2;
+            }
         }
 
         // if this is the last block and it's not full, duplicate the last sample(s) so we don't
