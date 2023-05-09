@@ -1,3 +1,5 @@
+#ifndef ARDUINO
+
 ////////////////////////////////////////////////////////////////////////////
 //                           **** ADPCM-XQ ****                           //
 //                  Xtreme Quality ADPCM Encoder/Decoder                  //
@@ -813,4 +815,5 @@ static void native_to_little_endian (void *data, char *format)
         format++;
     }
 }
+#endif
 
