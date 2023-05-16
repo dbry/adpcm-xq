@@ -9,6 +9,10 @@
 #ifndef ADPCMLIB_H_
 #define ADPCMLIB_H_
 
+#define NOISE_SHAPING_OFF       0   // flat noise (no shaping)
+#define NOISE_SHAPING_STATIC    1   // first-order highpass shaping
+#define NOISE_SHAPING_DYNAMIC   2   // dynamically tilted noise based on signal
+
 #if defined(_MSC_VER) && _MSC_VER < 1600
 typedef unsigned __int64 uint64_t;
 typedef unsigned __int32 uint32_t;
@@ -22,13 +26,19 @@ typedef __int8  int8_t;
 #include <stdint.h>
 #endif
 
+#ifdef __cplusplus 
+extern "C" {
+#endif
+
+
 void *adpcm_create_context (int num_channels, int lookahead, int noise_shaping, int32_t initial_deltas [2]);
 int adpcm_encode_block (void *p, uint8_t *outbuf, size_t *outbufsize, const int16_t *inbuf, int inbufcount);
 int adpcm_decode_block (int16_t *outbuf, const uint8_t *inbuf, size_t inbufsize, int channels);
 void adpcm_free_context (void *p);
 
-#define NOISE_SHAPING_OFF       0   // flat noise (no shaping)
-#define NOISE_SHAPING_STATIC    1   // first-order highpass shaping
-#define NOISE_SHAPING_DYNAMIC   2   // dynamically tilted noise based on signal
+#ifdef __cplusplus 
+}
+#endif
+
 
 #endif /* ADPCMLIB_H_ */
