@@ -36,12 +36,14 @@ static const char *usage =
 "           -h     = display this help message\n"
 "           -q     = quiet mode (display errors only)\n"
 "           -r     = raw output (little-endian, no WAV header written)\n"
+"           -s     = encode as Sound Blaster 4 ADPCM\n\n"
 "           -v     = verbose (display lots of info)\n"
 "           -y     = overwrite outfile if it exists\n\n"
 " Web:       Visit www.github.com/dbry/adpcm-xq for latest version and info\n\n";
 
 #define ADPCM_FLAG_NOISE_SHAPING    0x1
 #define ADPCM_FLAG_RAW_OUTPUT       0x2
+#define ADPCM_FLAG_SB4_OUTPUT       0x4
 
 static int adpcm_converter (char *infilename, char *outfilename, int flags, int blocksize_pow2, int lookahead);
 static int verbosity = 0, decode_only = 0, encode_only = 0;
@@ -114,6 +116,10 @@ int main (argc, argv) int argc; char **argv;
 
                     case 'Y': case 'y':
                         overwrite = 1;
+                        break;
+
+                    case 'S': case 's':
+                        flags |= ADPCM_FLAG_SB4_OUTPUT;
                         break;
 
                     default:
@@ -196,12 +202,15 @@ typedef struct {
 
 #define WAVE_FORMAT_PCM         0x1
 #define WAVE_FORMAT_IMA_ADPCM   0x11
+#define WAVE_FORMAT_SB4_ADPCM   0x0200
 #define WAVE_FORMAT_EXTENSIBLE  0xfffe
 
 static int write_pcm_wav_header (FILE *outfile, int num_channels, uint32_t num_samples, uint32_t sample_rate);
-static int write_adpcm_wav_header (FILE *outfile, int num_channels, uint32_t num_samples, uint32_t sample_rate, int samples_per_block);
-static int adpcm_decode_data (FILE *infile, FILE *outfile, int num_channels, uint32_t num_samples, int block_size);
-static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, uint32_t num_samples, int samples_per_block, int lookahead, int noise_shaping);
+static int write_adpcm_wav_header (FILE *outfile, int num_channels, uint32_t num_samples, uint32_t sample_rate, int samples_per_block, int format_tag);
+static int adpcm_decode_data (FILE *infile, FILE *outfile, int num_channels, uint32_t num_samples, int block_size, 
+    int (*decode_block)(int16_t *, const uint8_t *, size_t , int ));
+static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, uint32_t num_samples, int samples_per_block, int lookahead, int noise_shaping, 
+    void *(create_context) (int , int , int , int32_t [2]));
 static void little_endian_to_native (void *data, char *format);
 static void native_to_little_endian (void *data, char *format);
 
@@ -273,7 +282,7 @@ static int adpcm_converter (char *infilename, char *outfilename, int flags, int 
                 if (WaveHeader.BlockAlign != WaveHeader.NumChannels * 2)
                     supported = 0;
             }
-            else if (format == WAVE_FORMAT_IMA_ADPCM) {
+            else if (format == WAVE_FORMAT_IMA_ADPCM || format == WAVE_FORMAT_SB4_ADPCM) {
                 if (encode_only) {
                     fprintf (stderr, "\"%s\" is ADPCM .WAV file, invalid in encode-only mode!\n", infilename);
                     return -1;
@@ -437,7 +446,9 @@ static int adpcm_converter (char *infilename, char *outfilename, int flags, int 
             fprintf (stderr, "each %d byte ADPCM block will contain %d samples * %d channels\n",
                 block_size, samples_per_block, num_channels);
 
-        if (!(flags & ADPCM_FLAG_RAW_OUTPUT) && !write_adpcm_wav_header (outfile, num_channels, num_samples, sample_rate, samples_per_block)) {
+        if (!(flags & ADPCM_FLAG_RAW_OUTPUT) && !write_adpcm_wav_header (outfile, num_channels, num_samples, sample_rate, samples_per_block,
+            (flags & ADPCM_FLAG_SB4_OUTPUT) ? WAVE_FORMAT_SB4_ADPCM : WAVE_FORMAT_IMA_ADPCM
+            )) {
             fprintf (stderr, "can't write header to file \"%s\" !\n", outfilename);
             return -1;
         }
@@ -446,9 +457,11 @@ static int adpcm_converter (char *infilename, char *outfilename, int flags, int 
             infilename, (flags & ADPCM_FLAG_RAW_OUTPUT) ? " raw " : " ", outfilename);
 
         res = adpcm_encode_data (infile, outfile, num_channels, num_samples, samples_per_block, lookahead,
-            (flags & ADPCM_FLAG_NOISE_SHAPING) ? (sample_rate > 64000 ? NOISE_SHAPING_STATIC : NOISE_SHAPING_DYNAMIC) : NOISE_SHAPING_OFF);
+            (flags & ADPCM_FLAG_NOISE_SHAPING) ? (sample_rate > 64000 ? NOISE_SHAPING_STATIC : NOISE_SHAPING_DYNAMIC) : NOISE_SHAPING_OFF,
+            (flags & ADPCM_FLAG_SB4_OUTPUT) ? adpcm_create_sb4_context : adpcm_create_ima_context
+            );
     }
-    else if (format == WAVE_FORMAT_IMA_ADPCM) {
+    else if (format == WAVE_FORMAT_IMA_ADPCM || format == WAVE_FORMAT_SB4_ADPCM) {
         if (!(flags & ADPCM_FLAG_RAW_OUTPUT) && !write_pcm_wav_header (outfile, num_channels, num_samples, sample_rate)) {
             fprintf (stderr, "can't write header to file \"%s\" !\n", outfilename);
             return -1;
@@ -457,7 +470,8 @@ static int adpcm_converter (char *infilename, char *outfilename, int flags, int 
         if (verbosity >= 0) fprintf (stderr, "decoding ADPCM file \"%s\" to%sPCM file \"%s\"...\n",
             infilename, (flags & ADPCM_FLAG_RAW_OUTPUT) ? " raw " : " ", outfilename);
 
-        res = adpcm_decode_data (infile, outfile, num_channels, num_samples, WaveHeader.BlockAlign);
+        res = adpcm_decode_data (infile, outfile, num_channels, num_samples, WaveHeader.BlockAlign, 
+            (format == WAVE_FORMAT_SB4_ADPCM) ? adpcm_decode_sb4_block : adpcm_decode_ima_block);
     }
 
     fclose (outfile);
@@ -506,7 +520,7 @@ static int write_pcm_wav_header (FILE *outfile, int num_channels, uint32_t num_s
         fwrite (&datahdr, sizeof (datahdr), 1, outfile);
 }
 
-static int write_adpcm_wav_header (FILE *outfile, int num_channels, uint32_t num_samples, uint32_t sample_rate, int samples_per_block)
+static int write_adpcm_wav_header (FILE *outfile, int num_channels, uint32_t num_samples, uint32_t sample_rate, int samples_per_block, int format_tag)
 {
     RiffChunkHeader riffhdr;
     ChunkHeader datahdr, fmthdr;
@@ -527,7 +541,7 @@ static int write_adpcm_wav_header (FILE *outfile, int num_channels, uint32_t num
 
     memset (&wavhdr, 0, sizeof (wavhdr));
 
-    wavhdr.FormatTag = WAVE_FORMAT_IMA_ADPCM;
+    wavhdr.FormatTag = format_tag;
     wavhdr.NumChannels = num_channels;
     wavhdr.SampleRate = sample_rate;
     wavhdr.BytesPerSecond = sample_rate * block_size / samples_per_block;
@@ -563,7 +577,8 @@ static int write_adpcm_wav_header (FILE *outfile, int num_channels, uint32_t num
         fwrite (&datahdr, sizeof (datahdr), 1, outfile);
 }
 
-static int adpcm_decode_data (FILE *infile, FILE *outfile, int num_channels, uint32_t num_samples, int block_size)
+static int adpcm_decode_data (FILE *infile, FILE *outfile, int num_channels, uint32_t num_samples, int block_size, 
+    int (*decode_block) (int16_t *, const uint8_t *, size_t , int ))
 {
     int samples_per_block = (block_size - num_channels * 4) * (num_channels ^ 3) + 1, percent;
     void *pcm_block = malloc (samples_per_block * num_channels * 2);
@@ -596,7 +611,7 @@ static int adpcm_decode_data (FILE *infile, FILE *outfile, int num_channels, uin
             return -1;
         }
 
-        if (adpcm_decode_block (pcm_block, adpcm_block, block_size, num_channels) != this_block_adpcm_samples) {
+        if (decode_block (pcm_block, adpcm_block, block_size, num_channels) != this_block_adpcm_samples) {
             fprintf (stderr, "adpcm_decode_block() did not return expected value!\n");
             return -1;
         }
@@ -637,7 +652,8 @@ static int adpcm_decode_data (FILE *infile, FILE *outfile, int num_channels, uin
     return 0;
 }
 
-static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, uint32_t num_samples, int samples_per_block, int lookahead, int noise_shaping)
+static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, uint32_t num_samples, int samples_per_block, int lookahead, int noise_shaping, 
+    void *(create_context) (int , int , int , int32_t [2]))
 {
     int block_size = (samples_per_block - 1) / (num_channels ^ 3) + (num_channels * 4), percent;
     int16_t *pcm_block = malloc (samples_per_block * num_channels * 2);
@@ -716,7 +732,7 @@ static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, uin
             average_deltas [0] >>= 3;
             average_deltas [1] >>= 3;
 
-            adpcm_cnxt = adpcm_create_context (num_channels, lookahead, noise_shaping, average_deltas);
+            adpcm_cnxt = create_context (num_channels, lookahead, noise_shaping, average_deltas);
         }
 
         adpcm_encode_block (adpcm_cnxt, adpcm_block, &num_bytes, pcm_block, this_block_adpcm_samples);
