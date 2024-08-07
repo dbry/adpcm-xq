@@ -12,6 +12,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <math.h>
 
 #include "adpcm-lib.h"
 
@@ -34,6 +35,7 @@ static const char *usage =
 "           -e     = encode only (fail on WAV file already ADPCM)\n"
 "           -f     = encode flat noise (no dynamic noise shaping)\n"
 "           -h     = display this help message\n"
+"           -n     = measure and report quantization noise\n"
 "           -q     = quiet mode (display errors only)\n"
 "           -r     = raw output (little-endian, no WAV header written)\n"
 "           -v     = verbose (display lots of info)\n"
@@ -43,13 +45,15 @@ static const char *usage =
 
 #define ADPCM_FLAG_NOISE_SHAPING    0x1
 #define ADPCM_FLAG_RAW_OUTPUT       0x2
+#define ADPCM_FLAG_MEASURE_NOISE    0x4
 
-static int adpcm_converter (char *infilename, char *outfilename, int flags, int blocksize_pow2, int lookahead);
-static int verbosity = 0, decode_only = 0, encode_only = 0;
+static int adpcm_converter (char *infilename, char *outfilename);
+static int verbosity = 0, decode_only = 0, encode_only = 0, flags = ADPCM_FLAG_NOISE_SHAPING;
+static int lookahead = 3, blocksize_pow2 = 0;
 
 int main (argc, argv) int argc; char **argv;
 {
-    int lookahead = 3, flags = ADPCM_FLAG_NOISE_SHAPING, blocksize_pow2 = 0, overwrite = 0, asked_help = 0;
+    int overwrite = 0, asked_help = 0;
     char *infilename = NULL, *outfilename = NULL;
     FILE *outfile;
 
@@ -100,6 +104,10 @@ int main (argc, argv) int argc; char **argv;
 
                     case 'H': case 'h':
                         asked_help = 0;
+                        break;
+
+                    case 'N': case 'n':
+                        flags |= ADPCM_FLAG_MEASURE_NOISE;
                         break;
 
                     case 'Q': case 'q':
@@ -159,7 +167,7 @@ int main (argc, argv) int argc; char **argv;
         return -1;
     }
 
-    return adpcm_converter (infilename, outfilename, flags, blocksize_pow2, lookahead);
+    return adpcm_converter (infilename, outfilename);
 }
 
 typedef struct {
@@ -211,7 +219,7 @@ static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, uin
 static void little_endian_to_native (void *data, char *format);
 static void native_to_little_endian (void *data, char *format);
 
-static int adpcm_converter (char *infilename, char *outfilename, int flags, int blocksize_pow2, int lookahead)
+static int adpcm_converter (char *infilename, char *outfilename)
 {
     int format = 0, res = 0, bits_per_sample, num_channels;
     uint32_t fact_samples = 0, num_samples = 0, sample_rate;
@@ -651,6 +659,11 @@ static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, uin
     uint32_t progress_divider = 0;
     void *adpcm_cnxt = NULL;
 
+    double rms_noise_total [2] = { 0.0, 0.0 };
+    double rms_noise_peak [2] = { 0.0, 0.0 };
+    uint32_t max_error [2] = { 0, 0 };
+    uint32_t noise_samples = 0;
+
     if (!pcm_block || !adpcm_block) {
         fprintf (stderr, "could not allocate memory for buffers!\n");
         return -1;
@@ -732,6 +745,46 @@ static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, uin
             return -1;
         }
 
+        if (flags & ADPCM_FLAG_MEASURE_NOISE) {
+            int16_t *pcm_decoded = malloc (samples_per_block * num_channels * 2);
+            double rms_noise [2] = { 0.0, 0.0 };
+
+            if (adpcm_decode_block (pcm_decoded, adpcm_block, block_size, num_channels) != this_block_adpcm_samples) {
+                fprintf (stderr, "\radpcm_decode_block() did not return expected value!\n");
+                return -1;
+            }
+
+            for (int i = 0; i < this_block_pcm_samples * num_channels; i += num_channels) {
+                int32_t error = fabs (pcm_block [i] - pcm_decoded [i]);
+
+                if (error > max_error [0])
+                    max_error [0] = error;
+
+                rms_noise [0] += (double) error * error;
+
+                if (num_channels == 2) {
+                    error = fabs (pcm_block [i+1] - pcm_decoded [i+1]);
+
+                    if (error > max_error [1])
+                        max_error [1] = error;
+
+                    rms_noise [1] += (double) error * error;
+                }
+            }
+
+            noise_samples += this_block_pcm_samples;
+            rms_noise_total [0] += rms_noise [0];
+            rms_noise_total [1] += rms_noise [1];
+
+            if (rms_noise [0] / this_block_pcm_samples > rms_noise_peak [0])
+                rms_noise_peak [0] = rms_noise [0] / this_block_pcm_samples;
+
+            if (rms_noise [1] / this_block_pcm_samples > rms_noise_peak [1])
+                rms_noise_peak [1] = rms_noise [1] / this_block_pcm_samples;
+
+            free (pcm_decoded);
+        }
+
         if (!fwrite (adpcm_block, block_size, 1, outfile)) {
             fprintf (stderr, "\rcould not write all audio data to output file!\n");
             return -1;
@@ -751,6 +804,31 @@ static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, uin
 
     if (verbosity >= 0)
         fprintf (stderr, "\r...completed successfully\n");
+
+    if (flags & ADPCM_FLAG_MEASURE_NOISE) {
+        double full_scale_rms = 32768.0 * 32767.0 * 0.5;
+
+        if (num_channels == 2) {
+            rms_noise_total [0] /= noise_samples * full_scale_rms;
+            rms_noise_total [1] /= noise_samples * full_scale_rms;
+            rms_noise_peak [0] /= full_scale_rms;
+            rms_noise_peak [1] /= full_scale_rms;
+
+            fprintf (stderr, "\n         Channel:    left      right \n");
+            fprintf (stderr, "---------------------------------------\n");
+            fprintf (stderr, "Max Sample Error:  %6lu     %6lu\n", (unsigned long) max_error [0], (unsigned long) max_error [1]);
+            fprintf (stderr, " RMS Total Noise:  %6.2f dB  %6.2f dB\n", log10 (rms_noise_total [0]) * 10.0, log10 (rms_noise_total [1]) * 10.0);
+            fprintf (stderr, "  RMS Peak Noise:  %6.2f dB  %6.2f dB\n\n", log10 (rms_noise_peak [0]) * 10.0, log10 (rms_noise_peak [1]) * 10.0);
+        }
+        else {
+            rms_noise_total [0] /= noise_samples * full_scale_rms;
+            rms_noise_peak [0] /= full_scale_rms;
+
+            fprintf (stderr, "\nMax Sample Error:  %6lu\n", (unsigned long) max_error [0]);
+            fprintf (stderr, " RMS Total Noise:  %6.2f dB\n", log10 (rms_noise_total [0]) * 10.0);
+            fprintf (stderr, "  RMS Peak Noise:  %6.2f dB\n\n", log10 (rms_noise_peak [0]) * 10.0);
+        }
+    }
 
     if (adpcm_cnxt)
         adpcm_free_context (adpcm_cnxt);
