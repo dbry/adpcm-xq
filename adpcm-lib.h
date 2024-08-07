@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////
 //                           **** ADPCM-XQ ****                           //
 //                  Xtreme Quality ADPCM Encoder/Decoder                  //
-//                    Copyright (c) 2015 David Bryant.                    //
+//                    Copyright (c) 2024 David Bryant.                    //
 //                          All Rights Reserved.                          //
 //      Distributed under the BSD Software License (see license.txt)      //
 ////////////////////////////////////////////////////////////////////////////
@@ -12,6 +12,9 @@
 #define NOISE_SHAPING_OFF       0   // flat noise (no shaping)
 #define NOISE_SHAPING_STATIC    1   // first-order highpass shaping
 #define NOISE_SHAPING_DYNAMIC   2   // dynamically tilted noise based on signal
+
+#define LOOKAHEAD_DEPTH         0x0ff   // depth of search
+#define LOOKAHEAD_EXHAUSTIVE    0x800   // full breadth of search
 
 #if defined(_MSC_VER) && _MSC_VER < 1600
 typedef unsigned __int64 uint64_t;

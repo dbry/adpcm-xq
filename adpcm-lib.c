@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////
 //                           **** ADPCM-XQ ****                           //
 //                  Xtreme Quality ADPCM Encoder/Decoder                  //
-//                    Copyright (c) 2022 David Bryant.                    //
+//                    Copyright (c) 2024 David Bryant.                    //
 //                          All Rights Reserved.                          //
 //      Distributed under the BSD Software License (see license.txt)      //
 ////////////////////////////////////////////////////////////////////////////
@@ -24,6 +24,9 @@
 #define CLIP(data, min, max) \
 if ((data) > (max)) data = max; \
 else if ((data) < (min)) data = min;
+
+#define NIBBLE_TO_DELTA(n) ((n) < 8 ? (n) + 1 : 7 - (n))
+#define DELTA_TO_NIBBLE(d) ((d) < 0 ? 7 - (d) : (d) - 1)
 
 /* step table */
 static const uint16_t step_table[89] = {
@@ -48,6 +51,7 @@ static const int index_table[] = {
 };
 
 struct adpcm_channel {
+    struct adpcm_context *cxt;              // pointer back to context
     int32_t pcmdata;                        // current PCM value
     int32_t error, weight, history [2];     // for noise shaping
     int8_t index;                           // current index into step size table
@@ -72,6 +76,7 @@ void *adpcm_create_context (int num_channels, int lookahead, int noise_shaping, 
     int ch, i;
 
     memset (pcnxt, 0, sizeof (struct adpcm_context));
+    pcnxt->channels [0].cxt = pcnxt->channels [1].cxt = pcnxt;
     pcnxt->noise_shaping = noise_shaping;
     pcnxt->num_channels = num_channels;
     pcnxt->lookahead = lookahead;
@@ -160,8 +165,17 @@ static double minimum_error (const struct adpcm_channel *pchan, int nch, int32_t
     for (nibble2 = 0; nibble2 <= 0xF; ++nibble2) {
         double error;
 
-        if (nibble2 == nibble)
+        if (nibble2 == nibble)  // don't do the same value again
             continue;
+
+        // we skip this trial if:
+        // 1. we're not doing exhaustive search, and
+        // 2. the trial value is not either 0x7 or 0x15 (i.e., delta +/- 8) and,
+        // 3. the trial delta is greater than two away from the initial estimate...
+
+        if (!(chan.cxt->lookahead & LOOKAHEAD_EXHAUSTIVE) && (~nibble2 & 0x7) &&
+            abs (NIBBLE_TO_DELTA (nibble) - NIBBLE_TO_DELTA (nibble2)) > 2)
+                continue;
 
         chan = *pchan;
         trial_delta = (step >> 3);
@@ -227,8 +241,8 @@ static uint8_t encode_sample (struct adpcm_context *pcnxt, int ch, const int16_t
     else if (pcnxt->noise_shaping == NOISE_SHAPING_STATIC)
         pchan->error = -(csample -= pchan->error);
 
-    if (depth > pcnxt->lookahead)
-        depth = pcnxt->lookahead;
+    if (depth > (pcnxt->lookahead & LOOKAHEAD_DEPTH))
+        depth = (pcnxt->lookahead & LOOKAHEAD_DEPTH);
 
     minimum_error (pchan, pcnxt->num_channels, csample, sample, depth, &nibble);
 

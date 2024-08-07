@@ -3,7 +3,7 @@
 ////////////////////////////////////////////////////////////////////////////
 //                           **** ADPCM-XQ ****                           //
 //                  Xtreme Quality ADPCM Encoder/Decoder                  //
-//                    Copyright (c) 2022 David Bryant.                    //
+//                    Copyright (c) 2024 David Bryant.                    //
 //                          All Rights Reserved.                          //
 //      Distributed under the BSD Software License (see license.txt)      //
 ////////////////////////////////////////////////////////////////////////////
@@ -22,13 +22,13 @@
 
 static const char *sign_on = "\n"
 " ADPCM-XQ   Xtreme Quality IMA-ADPCM WAV Encoder / Decoder   Version 0.4\n"
-" Copyright (c) 2022 David Bryant. All Rights Reserved.\n\n";
+" Copyright (c) 2024 David Bryant. All Rights Reserved.\n\n";
 
 static const char *usage =
 " Usage:     ADPCM-XQ [-options] infile.wav outfile.wav\n\n"
 " Operation: conversion is performed based on the type of the infile\n"
 "          (either encode 16-bit PCM to 4-bit IMA-ADPCM or decode back)\n\n"
-" Options:  -[0-8] = encode lookahead samples (default = 3)\n"
+" Options:  -[0-9] = encode lookahead samples (default = 3)\n"
 "           -bn    = override auto block size, 2^n bytes (n = 8-15)\n"
 "           -d     = decode only (fail on WAV file already PCM)\n"
 "           -e     = encode only (fail on WAV file already ADPCM)\n"
@@ -37,6 +37,7 @@ static const char *usage =
 "           -q     = quiet mode (display errors only)\n"
 "           -r     = raw output (little-endian, no WAV header written)\n"
 "           -v     = verbose (display lots of info)\n"
+"           -x     = exhaustive search (old behavior, very slow at depth)\n"
 "           -y     = overwrite outfile if it exists\n\n"
 " Web:       Visit www.github.com/dbry/adpcm-xq for latest version and info\n\n";
 
@@ -70,7 +71,8 @@ int main (argc, argv) int argc; char **argv;
                     case '0': case '1': case '2':
                     case '3': case '4': case '5':
                     case '6': case '7': case '8':
-                        lookahead = **argv - '0';
+                    case '9':
+                        lookahead = ((**argv - '0') & LOOKAHEAD_DEPTH) | (lookahead & LOOKAHEAD_EXHAUSTIVE);
                         break;
 
                     case 'B': case 'b':
@@ -110,6 +112,10 @@ int main (argc, argv) int argc; char **argv;
 
                     case 'V': case 'v':
                         verbosity = 1;
+                        break;
+
+                    case 'X': case 'x':
+                        lookahead |= LOOKAHEAD_EXHAUSTIVE;
                         break;
 
                     case 'Y': case 'y':
