@@ -8,6 +8,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #include "adpcm-lib.h"
 
@@ -60,6 +61,7 @@ struct adpcm_channel {
 struct adpcm_context {
     struct adpcm_channel channels [2];
     int num_channels, lookahead, noise_shaping;
+    int static_shaping_weight;
 };
 
 /* Create ADPCM encoder context with given number of channels.
@@ -78,6 +80,7 @@ void *adpcm_create_context (int num_channels, int lookahead, int noise_shaping, 
     memset (pcnxt, 0, sizeof (struct adpcm_context));
     pcnxt->channels [0].cxt = pcnxt->channels [1].cxt = pcnxt;
     pcnxt->noise_shaping = noise_shaping;
+    pcnxt->static_shaping_weight = 1024;
     pcnxt->num_channels = num_channels;
     pcnxt->lookahead = lookahead;
 
@@ -91,6 +94,22 @@ void *adpcm_create_context (int num_channels, int lookahead, int noise_shaping, 
             }
 
     return pcnxt;
+}
+
+/* Set the shaping weight in range: -1.0 > weight >= 1.0.
+ * Note that previously this was fixed to pure first-order (i.e., 1.0).
+ * Also, values very close to -1.0 are not recommended because
+ * of the high DC gain.
+ */
+
+void adpcm_set_shaping_weight (void *p, double shaping_weight)
+{
+    struct adpcm_context *pcnxt = (struct adpcm_context *) p;
+
+    pcnxt->static_shaping_weight = (int) floor (shaping_weight * 1024.0 + 0.5);
+
+    if (pcnxt->static_shaping_weight > 1024) pcnxt->static_shaping_weight = 1024;
+    if (pcnxt->static_shaping_weight < -1023) pcnxt->static_shaping_weight = -1023;
 }
 
 /* Free the ADPCM encoder context.
@@ -215,18 +234,23 @@ static uint8_t encode_sample (struct adpcm_context *pcnxt, int ch, const int16_t
     int depth = num_samples - 1, nibble;
     uint16_t step = step_table[pchan->index];
     uint16_t trial_delta = (step >> 3);
+    int32_t shaping_weight = 0;
 
     if (pcnxt->noise_shaping == NOISE_SHAPING_DYNAMIC) {
         int32_t sam = (3 * pchan->history [0] - pchan->history [1]) >> 1;
         int32_t temp = csample - (((pchan->weight * sam) + 512) >> 10);
-        int32_t shaping_weight;
 
         if (sam && temp) pchan->weight -= (((sam ^ temp) >> 29) & 4) - 2;
         pchan->history [1] = pchan->history [0];
         pchan->history [0] = csample;
 
         shaping_weight = (pchan->weight < 256) ? 1024 : 1536 - (pchan->weight * 2);
-        temp = -((shaping_weight * pchan->error + 512) >> 10);
+    }
+    else if (pcnxt->noise_shaping == NOISE_SHAPING_STATIC)
+        shaping_weight = pcnxt->static_shaping_weight;
+
+    if (pcnxt->noise_shaping) {
+        int32_t temp = -((shaping_weight * pchan->error + 512) >> 10);
 
         if (shaping_weight < 0 && temp) {
             if (temp == pchan->error)
@@ -238,8 +262,6 @@ static uint8_t encode_sample (struct adpcm_context *pcnxt, int ch, const int16_t
         else
             pchan->error = -(csample += temp);
     }
-    else if (pcnxt->noise_shaping == NOISE_SHAPING_STATIC)
-        pchan->error = -(csample -= pchan->error);
 
     if (depth > (pcnxt->lookahead & LOOKAHEAD_DEPTH))
         depth = (pcnxt->lookahead & LOOKAHEAD_DEPTH);

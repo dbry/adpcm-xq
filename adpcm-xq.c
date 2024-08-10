@@ -30,14 +30,15 @@ static const char *usage =
 " Operation: conversion is performed based on the type of the infile\n"
 "          (either encode 16-bit PCM to 4-bit IMA-ADPCM or decode back)\n\n"
 " Options:  -[0-9] = encode lookahead samples (default = 3)\n"
-"           -bn    = override auto block size, 2^n bytes (n = 8-15)\n"
+"           -b<n>  = override auto block size, 2^n bytes (n = 8-15)\n"
 "           -d     = decode only (fail on WAV file already PCM)\n"
 "           -e     = encode only (fail on WAV file already ADPCM)\n"
-"           -f     = encode flat noise (no dynamic noise shaping)\n"
+"           -f     = encode flat noise (no noise shaping, aka -s0.0)\n"
 "           -h     = display this help message\n"
 "           -n     = measure and report quantization noise\n"
 "           -q     = quiet mode (display errors only)\n"
 "           -r     = raw output (little-endian, no WAV header written)\n"
+"           -s<n>  = override default noise shaping, (-1.0 > n >= 1.0)\n"
 "           -v     = verbose (display lots of info)\n"
 "           -x     = exhaustive search (old behavior, very slow at depth)\n"
 "           -y     = overwrite outfile if it exists\n\n"
@@ -47,9 +48,11 @@ static const char *usage =
 #define ADPCM_FLAG_RAW_OUTPUT       0x2
 #define ADPCM_FLAG_MEASURE_NOISE    0x4
 
+static double strtod_hexfree (const char *nptr, char **endptr);
 static int adpcm_converter (char *infilename, char *outfilename);
 static int verbosity = 0, decode_only = 0, encode_only = 0, flags = ADPCM_FLAG_NOISE_SHAPING;
 static int lookahead = 3, blocksize_pow2 = 0;
+static double static_shaping_weight = 0.0;
 
 int main (argc, argv) int argc; char **argv;
 {
@@ -100,6 +103,7 @@ int main (argc, argv) int argc; char **argv;
 
                     case 'F': case 'f':
                         flags &= ~ADPCM_FLAG_NOISE_SHAPING;
+                        static_shaping_weight = 0.0;
                         break;
 
                     case 'H': case 'h':
@@ -116,6 +120,20 @@ int main (argc, argv) int argc; char **argv;
 
                     case 'R': case 'r':
                         flags |= ADPCM_FLAG_RAW_OUTPUT;
+                        break;
+
+                    case 'S': case 's':
+                        static_shaping_weight = (float) strtod_hexfree (++*argv, argv);
+
+                        if (static_shaping_weight <= -1.0 || static_shaping_weight > 1.0) {
+                            fprintf (stderr, "\ninvalid noise shaping value!");
+                            return -1;
+                        }
+
+                        if (static_shaping_weight == 0.0)
+                            flags &= ~ADPCM_FLAG_NOISE_SHAPING;
+
+                        --*argv;
                         break;
 
                     case 'V': case 'v':
@@ -170,6 +188,30 @@ int main (argc, argv) int argc; char **argv;
     return adpcm_converter (infilename, outfilename);
 }
 
+// The C-standard function strtod() also handles hex numbers prefixed
+// with [+-]0[xX]. Unfortunately this causes problems for us in rare
+// cases where a value of zero is specified for one option followed
+// by the 'x' option (e.g., -s0xe). This version of strtod() does not
+// allow hex specification, but otherwise should be identical.
+
+static double strtod_hexfree (const char *nptr, char **endptr)
+{
+    const char *sptr = nptr;
+
+    // skip past any leading whitespace and possibly a sign
+    while isspace (*sptr) sptr++;
+    if (*sptr == '+' || *sptr == '-') sptr++;
+
+    // if hex detected ("0x" or "0X"), return 0.0 and end at the X
+    if (*sptr == '0' && tolower (sptr [1]) == 'x') {
+        if (endptr) *endptr = (char *) sptr + 1;
+        return 0.0;
+    }
+
+    // otherwise unmodified strtod() result
+    return strtod (nptr, endptr);
+}
+
 typedef struct {
     char ckID [4];
     uint32_t ckSize;
@@ -215,7 +257,7 @@ typedef struct {
 static int write_pcm_wav_header (FILE *outfile, int num_channels, uint32_t num_samples, uint32_t sample_rate);
 static int write_adpcm_wav_header (FILE *outfile, int num_channels, uint32_t num_samples, uint32_t sample_rate, int samples_per_block);
 static int adpcm_decode_data (FILE *infile, FILE *outfile, int num_channels, uint32_t num_samples, int block_size);
-static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, uint32_t num_samples, int samples_per_block, int lookahead, int noise_shaping);
+static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, uint32_t num_samples, int samples_per_block, int sample_rate);
 static void little_endian_to_native (void *data, char *format);
 static void native_to_little_endian (void *data, char *format);
 
@@ -459,8 +501,7 @@ static int adpcm_converter (char *infilename, char *outfilename)
         if (verbosity >= 0) fprintf (stderr, "encoding PCM file \"%s\" to%sADPCM file \"%s\"...\n",
             infilename, (flags & ADPCM_FLAG_RAW_OUTPUT) ? " raw " : " ", outfilename);
 
-        res = adpcm_encode_data (infile, outfile, num_channels, num_samples, samples_per_block, lookahead,
-            (flags & ADPCM_FLAG_NOISE_SHAPING) ? (sample_rate > 64000 ? NOISE_SHAPING_STATIC : NOISE_SHAPING_DYNAMIC) : NOISE_SHAPING_OFF);
+        res = adpcm_encode_data (infile, outfile, num_channels, num_samples, samples_per_block, sample_rate);
     }
     else if (format == WAVE_FORMAT_IMA_ADPCM) {
         if (!(flags & ADPCM_FLAG_RAW_OUTPUT) && !write_pcm_wav_header (outfile, num_channels, num_samples, sample_rate)) {
@@ -651,7 +692,7 @@ static int adpcm_decode_data (FILE *infile, FILE *outfile, int num_channels, uin
     return 0;
 }
 
-static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, uint32_t num_samples, int samples_per_block, int lookahead, int noise_shaping)
+static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, uint32_t num_samples, int samples_per_block, int sample_rate)
 {
     int block_size = (samples_per_block - 1) / (num_channels ^ 3) + (num_channels * 4), percent;
     int16_t *pcm_block = malloc (samples_per_block * num_channels * 2);
@@ -718,7 +759,7 @@ static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, uin
 
         if (!adpcm_cnxt) {
             int32_t average_deltas [2];
-            int i;
+            int noise_shaping, i;
 
             average_deltas [0] = average_deltas [1] = 0;
 
@@ -735,7 +776,23 @@ static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, uin
             average_deltas [0] >>= 3;
             average_deltas [1] >>= 3;
 
+            if (flags & ADPCM_FLAG_NOISE_SHAPING) {
+                if (static_shaping_weight != 0.0)
+                    noise_shaping = NOISE_SHAPING_STATIC;
+                else if (sample_rate > 64000) {
+                    noise_shaping = NOISE_SHAPING_STATIC;
+                    static_shaping_weight = 1.0;
+                }
+                else
+                    noise_shaping = NOISE_SHAPING_DYNAMIC;
+            }
+            else
+                noise_shaping = NOISE_SHAPING_OFF;
+
             adpcm_cnxt = adpcm_create_context (num_channels, lookahead, noise_shaping, average_deltas);
+
+            if (noise_shaping = NOISE_SHAPING_STATIC)
+                adpcm_set_shaping_weight (adpcm_cnxt, static_shaping_weight);
         }
 
         adpcm_encode_block (adpcm_cnxt, adpcm_block, &num_bytes, pcm_block, this_block_adpcm_samples);
