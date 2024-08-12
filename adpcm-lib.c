@@ -122,26 +122,6 @@ void adpcm_free_context (void *p)
     free (pcnxt);
 }
 
-static void set_decode_parameters (struct adpcm_context *pcnxt, int32_t *init_pcmdata, int8_t *init_index)
-{
-    int ch;
-
-    for (ch = 0; ch < pcnxt->num_channels; ch++) {
-        pcnxt->channels[ch].pcmdata = init_pcmdata[ch];
-        pcnxt->channels[ch].index = init_index[ch];
-    }
-}
-
-static void get_decode_parameters (struct adpcm_context *pcnxt, int32_t *init_pcmdata, int8_t *init_index)
-{
-    int ch;
-
-    for (ch = 0; ch < pcnxt->num_channels; ch++) {
-        init_pcmdata[ch] = pcnxt->channels[ch].pcmdata;
-        init_index[ch] = pcnxt->channels[ch].index;
-    }
-}
-
 static double minimum_error (const struct adpcm_channel *pchan, int nch, int32_t csample, const int16_t *sample, int depth, int *best_nibble)
 {
     int32_t delta = csample - pchan->pcmdata;
@@ -332,8 +312,6 @@ static void encode_chunks (struct adpcm_context *pcnxt, uint8_t **outbuf, size_t
 int adpcm_encode_block (void *p, uint8_t *outbuf, size_t *outbufsize, const int16_t *inbuf, int inbufcount)
 {
     struct adpcm_context *pcnxt = (struct adpcm_context *) p;
-    int32_t init_pcmdata[2];
-    int8_t init_index[2];
     int ch;
 
     *outbufsize = 0;
@@ -341,20 +319,16 @@ int adpcm_encode_block (void *p, uint8_t *outbuf, size_t *outbufsize, const int1
     if (!inbufcount)
         return 1;
 
-    get_decode_parameters(pcnxt, init_pcmdata, init_index);
-
     for (ch = 0; ch < pcnxt->num_channels; ch++) {
-        init_pcmdata[ch] = *inbuf++;
-        outbuf[0] = init_pcmdata[ch];
-        outbuf[1] = init_pcmdata[ch] >> 8;
-        outbuf[2] = init_index[ch];
+        outbuf[0] = pcnxt->channels[ch].pcmdata = *inbuf++;
+        outbuf[1] = pcnxt->channels[ch].pcmdata >> 8;
+        outbuf[2] = pcnxt->channels[ch].index;
         outbuf[3] = 0;
 
         outbuf += 4;
         *outbufsize += 4;
     }
 
-    set_decode_parameters(pcnxt, init_pcmdata, init_index);
     encode_chunks (pcnxt, &outbuf, outbufsize, &inbuf, inbufcount);
 
     return 1;
