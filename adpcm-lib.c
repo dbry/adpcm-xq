@@ -8,6 +8,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <float.h>
 #include <math.h>
 
 #include "adpcm-lib.h"
@@ -21,6 +22,11 @@
  */
 
 /********************************* 4-bit ADPCM encoder ********************************/
+
+typedef uint64_t rms_error_t;     // best if "double" or "uint64_t", "float" okay in a pinch
+#define MAX_RMS_ERROR UINT64_MAX
+// typedef double rms_error_t;     // best if "double" or "uint64_t", "float" okay in a pinch
+// #define MAX_RMS_ERROR DBL_MAX
 
 #define CLIP(data, min, max) \
 if ((data) > (max)) data = max; \
@@ -122,21 +128,24 @@ void adpcm_free_context (void *p)
     free (pcnxt);
 }
 
-static double minimum_error (const struct adpcm_channel *pchan, int nch, int32_t csample, const int16_t *sample, int depth, int *best_nibble)
+static rms_error_t minimum_error (const struct adpcm_channel *pchan, int nch, int32_t csample, const int16_t *sample, int depth, int *best_nibble, rms_error_t max_error)
 {
     int32_t delta = csample - pchan->pcmdata;
     struct adpcm_channel chan = *pchan;
     uint16_t step = step_table[chan.index];
     uint16_t trial_delta = (step >> 3);
     int nibble, nibble2;
-    double min_error;
+    rms_error_t min_error;
+
+    // this odd-looking code always generates the nibble value with the least error,
+    // regardless of step size (which was not true previously)
 
     if (delta < 0) {
-        int mag = (-delta << 2) / step;
+        int mag = ((-delta << 2) + (step & 3) + ((step & 1) << 1)) / step;
         nibble = 0x8 | (mag > 7 ? 7 : mag);
     }
     else {
-        int mag = (delta << 2) / step;
+        int mag = ((delta << 2) + (step & 3) + ((step & 1) << 1)) / step;
         nibble = mag > 7 ? 7 : mag;
     }
 
@@ -151,18 +160,21 @@ static double minimum_error (const struct adpcm_channel *pchan, int nch, int32_t
 
     CLIP(chan.pcmdata, -32768, 32767);
     if (best_nibble) *best_nibble = nibble;
-    min_error = (double) (chan.pcmdata - csample) * (chan.pcmdata - csample);
+    min_error = (rms_error_t) (chan.pcmdata - csample) * (chan.pcmdata - csample);
 
-    if (depth) {
-        chan.index += index_table[nibble & 0x07];
-        CLIP(chan.index, 0, 88);
-        min_error += minimum_error (&chan, nch, sample [nch], sample + nch, depth - 1, NULL);
-    }
-    else
+    // if we're at a leaf, or we're not at a leaf but have already exceeded the error limit, return
+    if (!depth || min_error >= max_error)
         return min_error;
 
+    chan.index += index_table[nibble & 0x07];   // execute the naively closest nibble and go deeper
+    CLIP(chan.index, 0, 88);
+    min_error += minimum_error (&chan, nch, sample [nch], sample + nch, depth - 1, NULL, max_error - min_error);
+
+    // min_error is the error (from here to the leaf) for the naively closest nibble.
+    // We may be able to improve on that by doing an alternative (not closest) nibble.
+
     for (nibble2 = 0; nibble2 <= 0xF; ++nibble2) {
-        double error;
+        rms_error_t error, threshold;
 
         if (nibble2 == nibble)  // don't do the same value again
             continue;
@@ -190,12 +202,13 @@ static double minimum_error (const struct adpcm_channel *pchan, int nch, int32_t
 
         CLIP(chan.pcmdata, -32768, 32767);
 
-        error = (double) (chan.pcmdata - csample) * (chan.pcmdata - csample);
+        error = (rms_error_t) (chan.pcmdata - csample) * (chan.pcmdata - csample);
+        threshold = max_error < min_error ? max_error : min_error;
 
-        if (error < min_error) {
+        if (error < threshold) {
             chan.index += index_table[nibble2 & 0x07];
             CLIP(chan.index, 0, 88);
-            error += minimum_error (&chan, nch, sample [nch], sample + nch, depth - 1, NULL);
+            error += minimum_error (&chan, nch, sample [nch], sample + nch, depth - 1, NULL, threshold - error);
 
             if (error < min_error) {
                 if (best_nibble) *best_nibble = nibble2;
@@ -246,7 +259,7 @@ static uint8_t encode_sample (struct adpcm_context *pcnxt, int ch, const int16_t
     if (depth > (pcnxt->lookahead & LOOKAHEAD_DEPTH))
         depth = (pcnxt->lookahead & LOOKAHEAD_DEPTH);
 
-    minimum_error (pchan, pcnxt->num_channels, csample, sample, depth, &nibble);
+    minimum_error (pchan, pcnxt->num_channels, csample, sample, depth, &nibble, MAX_RMS_ERROR);
 
     if (nibble & 1) trial_delta += (step >> 2);
     if (nibble & 2) trial_delta += (step >> 1);
