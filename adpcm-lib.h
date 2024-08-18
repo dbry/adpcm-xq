@@ -34,7 +34,7 @@ extern "C" {
 #endif
 
 
-void *adpcm_create_context (int num_channels, int lookahead, int noise_shaping, int32_t initial_deltas [2]);
+void *adpcm_create_context (int num_channels, int lookahead, int noise_shaping);
 void adpcm_set_shaping_weight (void *p, double shaping_weight);
 int adpcm_encode_block (void *p, uint8_t *outbuf, size_t *outbufsize, const int16_t *inbuf, int inbufcount);
 int adpcm_decode_block (int16_t *outbuf, const uint8_t *inbuf, size_t inbufsize, int channels);

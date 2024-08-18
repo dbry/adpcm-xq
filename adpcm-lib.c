@@ -78,7 +78,7 @@ struct adpcm_context {
  * for encoding independent frames).
  */
 
-void *adpcm_create_context (int num_channels, int lookahead, int noise_shaping, int32_t initial_deltas [2])
+void *adpcm_create_context (int num_channels, int lookahead, int noise_shaping)
 {
     struct adpcm_context *pcnxt = malloc (sizeof (struct adpcm_context));
     int ch, i;
@@ -90,14 +90,11 @@ void *adpcm_create_context (int num_channels, int lookahead, int noise_shaping, 
     pcnxt->num_channels = num_channels;
     pcnxt->lookahead = lookahead;
 
-    // given the supplied initial deltas, search for and store the closest index
+    // we set the indicies to invalid values so that we always recalculate them
+    // on at least the first frame (and every frame if the depth is sufficient)
 
     for (ch = 0; ch < num_channels; ++ch)
-        for (i = 0; i <= 88; i++)
-            if (i == 88 || initial_deltas [ch] < ((int32_t) step_table [i] + step_table [i+1]) / 2) {
-                pcnxt->channels [ch].index = i;
-                break;
-            }
+        pcnxt->channels [ch].index = -1;
 
     return pcnxt;
 }
@@ -325,6 +322,7 @@ static void encode_chunks (struct adpcm_context *pcnxt, uint8_t **outbuf, size_t
 int adpcm_encode_block (void *p, uint8_t *outbuf, size_t *outbufsize, const int16_t *inbuf, int inbufcount)
 {
     struct adpcm_context *pcnxt = (struct adpcm_context *) p;
+    int depth = inbufcount - 1;
     int ch;
 
     *outbufsize = 0;
@@ -332,8 +330,49 @@ int adpcm_encode_block (void *p, uint8_t *outbuf, size_t *outbufsize, const int1
     if (!inbufcount)
         return 1;
 
+    if (depth > (pcnxt->lookahead & LOOKAHEAD_DEPTH))
+        depth = (pcnxt->lookahead & LOOKAHEAD_DEPTH);
+
+    for (ch = 0; ch < pcnxt->num_channels; ch++)
+        pcnxt->channels[ch].pcmdata = *inbuf++;
+
+    // Use minimum_error() to find the optimum initial index if this is the first frame or
+    // the lookahead depth is at least 3. Below that just using the value leftover from
+    // the previous frame is better, and of course faster.
+
+    if (pcnxt->channels [0].index < 0 || depth >= 3)
+        for (ch = 0; ch < pcnxt->num_channels; ch++) {
+            rms_error_t min_error = MAX_RMS_ERROR;
+            rms_error_t error_per_index [89];
+            int best_index;
+
+            if (depth < 3)      // don't use a lower depth than 3 for this
+                depth = 3;
+
+            for (int tindex = 0; tindex <= 88; tindex++) {
+                pcnxt->channels [ch].index = tindex;
+                error_per_index [tindex] = minimum_error (pcnxt->channels + ch, pcnxt->num_channels, inbuf [ch], inbuf + ch, depth, NULL, MAX_RMS_ERROR);
+            }
+
+            // we use a 3-wide average window because the minimum_error() results can be noisy
+
+            for (int tindex = 0; tindex <= 87; tindex++) {
+                rms_error_t terror = error_per_index [tindex];
+
+                if (tindex)
+                    terror = (error_per_index [tindex - 1] + terror + error_per_index [tindex + 1]) / 3;
+
+                if (terror < min_error) {
+                    best_index = tindex;
+                    min_error = terror;
+                }
+            }
+
+            pcnxt->channels [ch].index = best_index;
+        }
+
     for (ch = 0; ch < pcnxt->num_channels; ch++) {
-        outbuf[0] = pcnxt->channels[ch].pcmdata = *inbuf++;
+        outbuf[0] = pcnxt->channels[ch].pcmdata;
         outbuf[1] = pcnxt->channels[ch].pcmdata >> 8;
         outbuf[2] = pcnxt->channels[ch].index;
         outbuf[3] = 0;
@@ -397,7 +436,7 @@ int adpcm_decode_block (int16_t *outbuf, const uint8_t *inbuf, size_t inbufsize,
                 if (*inbuf & 1) delta += (step >> 2);
                 if (*inbuf & 2) delta += (step >> 1);
                 if (*inbuf & 4) delta += step;
-                
+
                 if (*inbuf & 8)
                     pcmdata[ch] -= delta;
                 else

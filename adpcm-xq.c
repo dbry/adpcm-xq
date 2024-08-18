@@ -754,27 +754,8 @@ static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, uin
                 *dst++ = *src++;
         }
 
-        // if this is the first block, compute a decaying average (in reverse) so that we can let the
-        // encoder know what kind of initial deltas to expect (helps initializing index)
-
         if (!adpcm_cnxt) {
-            int32_t average_deltas [2];
-            int noise_shaping, i;
-
-            average_deltas [0] = average_deltas [1] = 0;
-
-            for (i = this_block_adpcm_samples * num_channels; i -= num_channels;) {
-                average_deltas [0] -= average_deltas [0] >> 3;
-                average_deltas [0] += abs ((int32_t) pcm_block [i] - pcm_block [i - num_channels]);
-
-                if (num_channels == 2) {
-                    average_deltas [1] -= average_deltas [1] >> 3;
-                    average_deltas [1] += abs ((int32_t) pcm_block [i-1] - pcm_block [i+1]);
-                }
-            }
-
-            average_deltas [0] >>= 3;
-            average_deltas [1] >>= 3;
+            int noise_shaping;
 
             if (flags & ADPCM_FLAG_NOISE_SHAPING) {
                 if (static_shaping_weight != 0.0)
@@ -789,9 +770,9 @@ static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, uin
             else
                 noise_shaping = NOISE_SHAPING_OFF;
 
-            adpcm_cnxt = adpcm_create_context (num_channels, lookahead, noise_shaping, average_deltas);
+            adpcm_cnxt = adpcm_create_context (num_channels, lookahead, noise_shaping);
 
-            if (noise_shaping = NOISE_SHAPING_STATIC)
+            if (noise_shaping == NOISE_SHAPING_STATIC)
                 adpcm_set_shaping_weight (adpcm_cnxt, static_shaping_weight);
         }
 
