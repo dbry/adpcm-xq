@@ -58,9 +58,10 @@ static const int index_table[] = {
 };
 
 struct adpcm_channel {
-    struct adpcm_context *cxt;              // pointer back to context
+    const struct adpcm_context *cxt;        // read-only pointer back to context
     int32_t pcmdata;                        // current PCM value
     int32_t error, weight, history [2];     // for noise shaping
+    int32_t shaping_weight;                 // for noise shaping
     int8_t index;                           // current index into step size table
 };
 
@@ -125,9 +126,32 @@ void adpcm_free_context (void *p)
     free (pcnxt);
 }
 
+// Apply noise-shaping to the supplied sample value using the shaping_weight
+// and accumulated error term stored in the adpcm_channel structure. Note that
+// the error term in the structure is updated, but won't be "correct" until the
+// final re-quantized sample value is added to it (and of course we don't know
+// that value yet).
+
+static inline int32_t noise_shape (struct adpcm_channel *pchan, int32_t sample)
+{
+    int32_t temp = -((pchan->shaping_weight * pchan->error + 512) >> 10);
+
+    if (pchan->shaping_weight < 0 && temp) {
+        if (temp == pchan->error)
+            temp = (temp < 0) ? temp + 1 : temp - 1;
+
+        pchan->error = -sample;
+        sample += temp;
+    }
+    else
+        pchan->error = -(sample += temp);
+
+    return sample;
+}
+
 static rms_error_t minimum_error (const struct adpcm_channel *pchan, int nch, int32_t csample, const int16_t *sample, int depth, int *best_nibble, rms_error_t max_error)
 {
-    int32_t delta = csample - pchan->pcmdata;
+    int32_t delta = csample - pchan->pcmdata, csample2;
     struct adpcm_channel chan = *pchan;
     uint16_t step = step_table[chan.index];
     uint16_t trial_delta = (step >> 3);
@@ -165,7 +189,15 @@ static rms_error_t minimum_error (const struct adpcm_channel *pchan, int nch, in
 
     chan.index += index_table[nibble & 0x07];   // execute the naively closest nibble and go deeper
     CLIP(chan.index, 0, 88);
-    min_error += minimum_error (&chan, nch, sample [nch], sample + nch, depth - 1, NULL, max_error - min_error);
+
+    csample2 = sample [nch];
+
+    if (chan.cxt->noise_shaping) {
+        chan.error += chan.pcmdata;
+        csample2 = noise_shape (&chan, csample2);
+    }
+
+    min_error += minimum_error (&chan, nch, csample2, sample + nch, depth - 1, NULL, max_error - min_error);
 
     // min_error is the error (from here to the leaf) for the naively closest nibble.
     // We may be able to improve on that by doing an alternative (not closest) nibble.
@@ -205,7 +237,14 @@ static rms_error_t minimum_error (const struct adpcm_channel *pchan, int nch, in
         if (error < threshold) {
             chan.index += index_table[nibble2 & 0x07];
             CLIP(chan.index, 0, 88);
-            error += minimum_error (&chan, nch, sample [nch], sample + nch, depth - 1, NULL, threshold - error);
+            csample2 = sample [nch];
+
+            if (chan.cxt->noise_shaping) {
+                chan.error += chan.pcmdata;
+                csample2 = noise_shape (&chan, csample2);
+            }
+
+            error += minimum_error (&chan, nch, csample2, sample + nch, depth - 1, NULL, threshold - error);
 
             if (error < min_error) {
                 if (best_nibble) *best_nibble = nibble2;
@@ -224,7 +263,6 @@ static uint8_t encode_sample (struct adpcm_context *pcnxt, int ch, const int16_t
     int depth = num_samples - 1, nibble;
     uint16_t step = step_table[pchan->index];
     uint16_t trial_delta = (step >> 3);
-    int32_t shaping_weight = 0;
 
     if (pcnxt->noise_shaping == NOISE_SHAPING_DYNAMIC) {
         int32_t sam = (3 * pchan->history [0] - pchan->history [1]) >> 1;
@@ -234,24 +272,13 @@ static uint8_t encode_sample (struct adpcm_context *pcnxt, int ch, const int16_t
         pchan->history [1] = pchan->history [0];
         pchan->history [0] = csample;
 
-        shaping_weight = (pchan->weight < 256) ? 1024 : 1536 - (pchan->weight * 2);
+        pchan->shaping_weight = (pchan->weight < 256) ? 1024 : 1536 - (pchan->weight * 2);
     }
     else if (pcnxt->noise_shaping == NOISE_SHAPING_STATIC)
-        shaping_weight = pcnxt->static_shaping_weight;
+        pchan->shaping_weight = pcnxt->static_shaping_weight;
 
-    if (pcnxt->noise_shaping) {
-        int32_t temp = -((shaping_weight * pchan->error + 512) >> 10);
-
-        if (shaping_weight < 0 && temp) {
-            if (temp == pchan->error)
-                temp = (temp < 0) ? temp + 1 : temp - 1;
-
-            pchan->error = -csample;
-            csample += temp;
-        }
-        else
-            pchan->error = -(csample += temp);
-    }
+    if (pcnxt->noise_shaping)
+        csample = noise_shape (pchan, csample); 
 
     if (depth > (pcnxt->lookahead & LOOKAHEAD_DEPTH))
         depth = (pcnxt->lookahead & LOOKAHEAD_DEPTH);
@@ -350,8 +377,11 @@ int adpcm_encode_block (void *p, uint8_t *outbuf, size_t *outbufsize, const int1
                 depth = 3;
 
             for (int tindex = 0; tindex <= 88; tindex++) {
-                pcnxt->channels [ch].index = tindex;
-                error_per_index [tindex] = minimum_error (pcnxt->channels + ch, pcnxt->num_channels, inbuf [ch], inbuf + ch, depth, NULL, MAX_RMS_ERROR);
+                struct adpcm_channel chan = pcnxt->channels [ch];
+
+                chan.index = tindex;
+                chan.shaping_weight = 0;
+                error_per_index [tindex] = minimum_error (&chan, pcnxt->num_channels, inbuf [ch], inbuf + ch, depth, NULL, MAX_RMS_ERROR);
             }
 
             // we use a 3-wide average window because the minimum_error() results can be noisy
