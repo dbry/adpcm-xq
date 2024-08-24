@@ -57,6 +57,16 @@ static const int index_table[] = {
     -1, -1, -1, -1, 2, 4, 6, 8
 };
 
+static const int index_table_3bit[] = {
+    /* adpcm data size is 3 */
+    -1, -1, 1, 2
+};
+
+static const int index_table_5bit[] = {
+    /* adpcm data size is 5 */
+    -1, -1, -1, -1, -1, -1, -1, -1, 1, 2, 4, 6, 8, 10, 13, 16
+};
+
 struct adpcm_channel {
     const struct adpcm_context *cxt;        // read-only pointer back to context
     int32_t pcmdata;                        // current PCM value
@@ -187,9 +197,10 @@ static rms_error_t minimum_error (const struct adpcm_channel *pchan, int nch, in
     if (!depth || min_error >= max_error)
         return min_error;
 
-    chan.index += index_table[nibble & 0x07];   // execute the naively closest nibble and go deeper
-    CLIP(chan.index, 0, 88);
+    // otherwise we execute that naively closest nibble and search deeper for improvement
 
+    chan.index += index_table[nibble & 0x07];
+    CLIP(chan.index, 0, 88);
     csample2 = sample [nch];
 
     if (chan.cxt->noise_shaping) {
@@ -418,10 +429,10 @@ int adpcm_encode_block (void *p, uint8_t *outbuf, size_t *outbufsize, const int1
 
 /********************************* 4-bit ADPCM decoder ********************************/
 
-/* Decode the block of ADPCM data into PCM. This requires no context because ADPCM blocks
- * are indeppendently decodable. This assumes that a single entire block is always decoded;
- * it must be called multiple times for multiple blocks and cannot resume in the middle of a
- * block.
+/* Decode the block of 4-bit ADPCM data into PCM. This requires no context because ADPCM
+ * blocks are independently decodable. This assumes that a single entire block is always
+ * decoded; it must be called multiple times for multiple blocks and cannot resume in the
+ * middle of a block. Note that for all other bit depths, use adpcm_decode_block_ex().
  *
  * Parameters:
  *  outbuf          destination for interleaved PCM samples
@@ -505,3 +516,153 @@ int adpcm_decode_block (int16_t *outbuf, const uint8_t *inbuf, size_t inbufsize,
     return samples;
 }
 
+/********************************* 4-bit ADPCM decoder ********************************/
+
+/* Decode the block of ADPCM data, with from 2 to 5 bits per sample, into 16-bit PCM.
+ * This requires no context because ADPCM blocks are independently decodable. This assumes
+ * that a single entire block is always decoded; it must be called multiple times for
+ * multiple blocks and cannot resume in the middle of a block.
+ *
+ * Parameters:
+ *  outbuf          destination for interleaved PCM samples
+ *  inbuf           source ADPCM block
+ *  inbufsize       size of source ADPCM block
+ *  channels        number of channels in block (must be determined from other context)
+ *  bps             bits per ADPCM sample (2-5, must be determined from other context)
+ *
+ * Returns number of converted composite samples (total samples divided by number of channels)
+ */ 
+
+int adpcm_decode_block_ex (int16_t *outbuf, const uint8_t *inbuf, size_t inbufsize, int channels, int bps)
+{
+    int samples = 1, ch;
+    int32_t pcmdata[2];
+    int8_t index[2];
+
+    if (bps == 4)
+        return adpcm_decode_block (outbuf, inbuf, inbufsize, channels);
+
+    if (bps < 2 || bps > 5 || inbufsize < (uint32_t) channels * 4)
+        return 0;
+
+    for (ch = 0; ch < channels; ch++) {
+        *outbuf++ = pcmdata[ch] = (int16_t) (inbuf [0] | (inbuf [1] << 8));
+        index[ch] = inbuf [2];
+
+        if (index [ch] < 0 || index [ch] > 88 || inbuf [3])     // sanitize the input a little...
+            return 0;
+
+        inbufsize -= 4;
+        inbuf += 4;
+    }
+
+    if (!inbufsize || (inbufsize % (channels * 4)))             // extra clean
+        return samples;
+
+    samples += inbufsize / channels * 8 / bps;
+
+    switch (bps) {
+        case 2:
+            for (ch = 0; ch < channels; ++ch) {
+                int shiftbits = 0, numbits = 0, i, j;
+
+                for (j = i = 0; i < samples - 1; ++i) {
+                    uint16_t step = step_table [index [ch]];
+
+                    if (numbits < bps) {
+                        shiftbits |= inbuf [(j & ~3) * channels + (ch * 4) + (j & 3)] << numbits;
+                        numbits += 8;
+                        j++;
+                    }
+
+                    if (shiftbits & 2)
+                        pcmdata[ch] -= step * (shiftbits & 1) + (step >> 1);
+                    else
+                        pcmdata[ch] += step * (shiftbits & 1) + (step >> 1);
+
+                    index[ch] += (shiftbits & 1) * 3 - 1;
+                    shiftbits >>= bps;
+                    numbits -= bps;
+
+                    CLIP(index[ch], 0, 88);
+                    CLIP(pcmdata[ch], -32768, 32767);
+                    outbuf [i * channels + ch] = pcmdata[ch];
+                }
+            }
+
+            break;
+
+        case 3:
+            for (ch = 0; ch < channels; ++ch) {
+                int shiftbits = 0, numbits = 0, i, j;
+
+                for (j = i = 0; i < samples - 1; ++i) {
+                    uint16_t step = step_table [index [ch]], delta = step >> 2;
+
+                    if (numbits < bps) {
+                        shiftbits |= inbuf [(j & ~3) * channels + (ch * 4) + (j & 3)] << numbits;
+                        numbits += 8;
+                        j++;
+                    }
+
+                    if (shiftbits & 1) delta += (step >> 1);
+                    if (shiftbits & 2) delta += step;
+
+                    if (shiftbits & 4)
+                        pcmdata[ch] -= delta;
+                    else
+                        pcmdata[ch] += delta;
+
+                    index[ch] += index_table_3bit [shiftbits & 0x3];
+                    shiftbits >>= bps;
+                    numbits -= bps;
+
+                    CLIP(index[ch], 0, 88);
+                    CLIP(pcmdata[ch], -32768, 32767);
+                    outbuf [i * channels + ch] = pcmdata[ch];
+                }
+            }
+
+            break;
+
+        case 5:
+            for (ch = 0; ch < channels; ++ch) {
+                int shiftbits = 0, numbits = 0, i, j;
+
+                for (j = i = 0; i < samples - 1; ++i) {
+                    uint16_t step = step_table [index [ch]], delta = step >> 4;
+
+                    if (numbits < bps) {
+                        shiftbits |= inbuf [(j & ~3) * channels + (ch * 4) + (j & 3)] << numbits;
+                        numbits += 8;
+                        j++;
+                    }
+
+                    if (shiftbits & 1) delta += (step >> 3);
+                    if (shiftbits & 2) delta += (step >> 2);
+                    if (shiftbits & 4) delta += (step >> 1);
+                    if (shiftbits & 8) delta += step;
+
+                    if (shiftbits & 0x10)
+                        pcmdata[ch] -= delta;
+                    else
+                        pcmdata[ch] += delta;
+
+                    index[ch] += index_table_5bit [shiftbits & 0xf];
+                    shiftbits >>= bps;
+                    numbits -= bps;
+
+                    CLIP(index[ch], 0, 88);
+                    CLIP(pcmdata[ch], -32768, 32767);
+                    outbuf [i * channels + ch] = pcmdata[ch];
+                }
+            }
+
+            break;
+
+        default:
+            return 0;
+    }
+
+    return samples;
+}
