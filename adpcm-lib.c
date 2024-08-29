@@ -718,7 +718,7 @@ static void encode_chunks (struct adpcm_context *pcnxt, uint8_t *outbuf, size_t 
         }
 
         if (numbits)
-            outbuf [(j & ~3) * pcnxt->num_channels + (ch * 4) + (j & 3)] - shiftbits;
+            outbuf [(j & ~3) * pcnxt->num_channels + (ch * 4) + (j & 3)] = shiftbits;
     }
 
     *outbufsize += (inbufcount * bps + 31) / 32 * pcnxt->num_channels * 4;
