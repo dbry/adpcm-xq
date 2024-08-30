@@ -282,8 +282,8 @@ static void native_to_little_endian (void *data, char *format);
 
 static int adpcm_converter (char *infilename, char *outfilename)
 {
-    int format = 0, res = 0, bits_per_sample, num_channels;
-    uint32_t fact_samples = 0, num_samples = 0, sample_rate;
+    int format = 0, res = 0, bits_per_sample = 0, num_channels = 0;
+    uint32_t fact_samples = 0, num_samples = 0, sample_rate = 0;
     FILE *infile, *outfile;
     RiffChunkHeader riff_chunk_header;
     ChunkHeader chunk_header;
@@ -564,13 +564,13 @@ static int write_pcm_wav_header (FILE *outfile, int num_channels, uint32_t num_s
     wavhdr.BlockAlign = bytes_per_sample * num_channels;
     wavhdr.BitsPerSample = 16;
 
-    strncpy (riffhdr.ckID, "RIFF", sizeof (riffhdr.ckID));
-    strncpy (riffhdr.formType, "WAVE", sizeof (riffhdr.formType));
+    memcpy (riffhdr.ckID, "RIFF", sizeof (riffhdr.ckID));
+    memcpy (riffhdr.formType, "WAVE", sizeof (riffhdr.formType));
     riffhdr.ckSize = sizeof (riffhdr) + wavhdrsize + sizeof (datahdr) + total_data_bytes;
-    strncpy (fmthdr.ckID, "fmt ", sizeof (fmthdr.ckID));
+    memcpy (fmthdr.ckID, "fmt ", sizeof (fmthdr.ckID));
     fmthdr.ckSize = wavhdrsize;
 
-    strncpy (datahdr.ckID, "data", sizeof (datahdr.ckID));
+    memcpy (datahdr.ckID, "data", sizeof (datahdr.ckID));
     datahdr.ckSize = total_data_bytes;
 
     // write the RIFF chunks up to just before the data starts
@@ -599,11 +599,8 @@ static int write_adpcm_wav_header (FILE *outfile, int num_channels, int bps, uin
     int leftover_samples = num_samples % samples_per_block;
     uint32_t total_data_bytes = num_blocks * block_size;
 
-    if (leftover_samples) {
-        int last_block_size = ((leftover_samples - 1) * bps + 31) / 32 * num_channels * 4 + (num_channels * 4);
-        int last_block_samples = ((last_block_size - (num_channels * 4)) / num_channels * 8 / bps) + 1;
-        total_data_bytes += last_block_size;
-    }
+    if (leftover_samples)
+        total_data_bytes += ((leftover_samples - 1) * bps + 31) / 32 * num_channels * 4 + (num_channels * 4);
 
     memset (&wavhdr, 0, sizeof (wavhdr));
 
@@ -616,16 +613,16 @@ static int write_adpcm_wav_header (FILE *outfile, int num_channels, int bps, uin
     wavhdr.cbSize = 2;
     wavhdr.Samples.SamplesPerBlock = samples_per_block;
 
-    strncpy (riffhdr.ckID, "RIFF", sizeof (riffhdr.ckID));
-    strncpy (riffhdr.formType, "WAVE", sizeof (riffhdr.formType));
+    memcpy (riffhdr.ckID, "RIFF", sizeof (riffhdr.ckID));
+    memcpy (riffhdr.formType, "WAVE", sizeof (riffhdr.formType));
     riffhdr.ckSize = sizeof (riffhdr) + wavhdrsize + sizeof (facthdr) + sizeof (datahdr) + total_data_bytes;
-    strncpy (fmthdr.ckID, "fmt ", sizeof (fmthdr.ckID));
+    memcpy (fmthdr.ckID, "fmt ", sizeof (fmthdr.ckID));
     fmthdr.ckSize = wavhdrsize;
-    strncpy (facthdr.ckID, "fact", sizeof (facthdr.ckID));
+    memcpy (facthdr.ckID, "fact", sizeof (facthdr.ckID));
     facthdr.TotalSamples = num_samples;
     facthdr.ckSize = 4;
 
-    strncpy (datahdr.ckID, "data", sizeof (datahdr.ckID));
+    memcpy (datahdr.ckID, "data", sizeof (datahdr.ckID));
     datahdr.ckSize = total_data_bytes;
 
     // write the RIFF chunks up to just before the data starts
