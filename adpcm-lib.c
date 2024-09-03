@@ -743,7 +743,6 @@ static void encode_chunks (struct adpcm_context *pcnxt, uint8_t *outbuf, size_t 
 int adpcm_encode_block_ex (void *p, uint8_t *outbuf, size_t *outbufsize, const int16_t *inbuf, int inbufcount, int bps)
 {
     struct adpcm_context *pcnxt = (struct adpcm_context *) p;
-    int flags = 16 | LOOKAHEAD_NO_BRANCHING;
     int ch;
 
     *outbufsize = 0;
@@ -754,17 +753,24 @@ int adpcm_encode_block_ex (void *p, uint8_t *outbuf, size_t *outbufsize, const i
     if (!inbufcount)
         return 1;
 
-    if ((flags & LOOKAHEAD_DEPTH) > inbufcount - 1)
-        flags = (flags & ~LOOKAHEAD_DEPTH) + inbufcount - 1;
+    // The first PCM sample is encoded verbatim. In theory, we should apply the noise shaping,
+    // but we'll actually just apply the error term on the next sample.
 
     for (ch = 0; ch < pcnxt->num_channels; ch++)
         pcnxt->channels[ch].pcmdata = *inbuf++;
+
+    inbufcount--;
 
     // Use min_error_nbit() to find the optimum initial index if this is the first frame or
     // the lookahead depth is at least 3. Below that just using the value leftover from
     // the previous frame is better, and of course faster.
 
-    if (pcnxt->channels [0].index < 0 || (pcnxt->config_flags & LOOKAHEAD_DEPTH) >= 3)
+    if (inbufcount && (pcnxt->channels [0].index < 0 || (pcnxt->config_flags & LOOKAHEAD_DEPTH) >= 3)) {
+        int flags = 16 | LOOKAHEAD_NO_BRANCHING;
+
+        if ((flags & LOOKAHEAD_DEPTH) > inbufcount - 1)
+            flags = (flags & ~LOOKAHEAD_DEPTH) + inbufcount - 1;
+
         for (ch = 0; ch < pcnxt->num_channels; ch++) {
             rms_error_t min_error = MAX_RMS_ERROR;
             rms_error_t error_per_index [89];
@@ -802,6 +808,7 @@ int adpcm_encode_block_ex (void *p, uint8_t *outbuf, size_t *outbufsize, const i
 
             pcnxt->channels [ch].index = best_index;
         }
+    }
 
     // write the block header, which includes the first PCM sample verbatim
 
@@ -815,9 +822,10 @@ int adpcm_encode_block_ex (void *p, uint8_t *outbuf, size_t *outbufsize, const i
         *outbufsize += 4;
     }
 
-    // encode the rest of the PCM samples into 32-bit, possibly interleaved, chunks
+    // encode the rest of the PCM samples, if any, into 32-bit, possibly interleaved, chunks
 
-    encode_chunks (pcnxt, outbuf, outbufsize, inbuf, inbufcount - 1, bps);
+    if (inbufcount)
+        encode_chunks (pcnxt, outbuf, outbufsize, inbuf, inbufcount, bps);
 
     return 1;
 }
