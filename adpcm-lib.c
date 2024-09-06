@@ -90,6 +90,48 @@ struct adpcm_context {
     int static_shaping_weight;
 };
 
+/* With the addition of 3-bit and 5-bit ADPCM formats and various alignment requirements,
+ * it's become rather complicated to convert between sample counts and block sizes and
+ * make sure the alignment is always correct. Therefore I have put dedicated functions
+ * for this in here and removed the functionality from the command-line program.
+ *
+ * The first two function simply convert back and forth between sample counts and
+ * block sizes (including the header). Note that these functions ignore the alignment
+ * requirement that the 3-bit and 5-bit formats must exactly fill the block because
+ * this requirement is really not neccessary and some programs ignore it (e.g., Adobe
+ * Audition), so it's good to be able to correctly _decode_ such files (but probably
+ * not a great idea to _create_ them).
+ */
+
+int adpcm_sample_count_to_block_size (int sample_count, int num_chans, int bps)
+{
+    return ((sample_count - 1) * bps + 31) / 32 * num_chans * 4 + (num_chans * 4);
+}
+
+int adpcm_block_size_to_sample_count (int block_size, int num_chans, int bps)
+{
+    return (block_size - num_chans * 4) / num_chans * 8 / bps + 1;
+}
+
+/* Convert an ADPCM block size (including header) to a (possibly) modified size that
+ * is exactly bit-filled given the channel count and sample size (from 2 - 5 bits).
+ * The round_up arg controls whether we round up or down to the next aligned value.
+ * Rounding up ensures that the new block size will still hold at least as many
+ * samples as the old block size. Even though this particular alignment requirement
+ * is not really required (the spec is ambiguous) and some programs ignore it, both
+ * FFmpeg (VLC) and Rockbox generate glitches when playing files that don't adhere,
+ * so this function is provided to enforce it.
+ */
+
+int adpcm_align_block_size (int block_size, int num_chans, int bps, int round_up)
+{
+    int sample_count = adpcm_block_size_to_sample_count (block_size, num_chans, bps) - 1;
+    int sample_align = (bps & 1) ? 32 : 32 / bps;
+
+    sample_count = (sample_count + (sample_align - 1) * round_up) / sample_align * sample_align;
+    return adpcm_sample_count_to_block_size (sample_count + 1, num_chans, bps);
+}
+
 /* Create ADPCM encoder context with given number of channels.
  * The returned pointer is used for subsequent calls. Note that
  * even though an ADPCM encoder could be set up to encode frames

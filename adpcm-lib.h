@@ -34,6 +34,11 @@ typedef __int8  int8_t;
 extern "C" {
 #endif
 
+/* adpcm-lib.c */
+
+int adpcm_sample_count_to_block_size (int sample_count, int num_chans, int bps);
+int adpcm_block_size_to_sample_count (int block_size, int num_chans, int bps);
+int adpcm_align_block_size (int block_size, int num_chans, int bps, int round_up);
 void *adpcm_create_context (int num_channels, int lookahead, int noise_shaping);
 void adpcm_set_shaping_weight (void *p, double shaping_weight);
 int adpcm_encode_block_ex (void *p, uint8_t *outbuf, size_t *outbufsize, const int16_t *inbuf, int inbufcount, int bps);

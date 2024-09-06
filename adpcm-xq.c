@@ -361,8 +361,8 @@ static int adpcm_converter (char *infilename, char *outfilename)
                 if (bits_per_sample < 2 || bits_per_sample > 5)
                     supported = 0;
 
-                if (WaveHeader.Samples.SamplesPerBlock !=
-                    (((WaveHeader.BlockAlign - WaveHeader.NumChannels * 4) / WaveHeader.NumChannels * 8 / bits_per_sample)) + 1) {
+                if (WaveHeader.Samples.SamplesPerBlock >
+                    adpcm_block_size_to_sample_count (WaveHeader.BlockAlign, WaveHeader.NumChannels, bits_per_sample)) {
                         fprintf (stderr, "\"%s\" is not a valid .WAV file!\n", infilename);
                         return -1;
                 }
@@ -512,7 +512,8 @@ static int adpcm_converter (char *infilename, char *outfilename)
         else
             block_size = 256 * num_channels * (sample_rate < 11000 ? 1 : sample_rate / 11000);
 
-        samples_per_block = (block_size - num_channels * 4) / num_channels * 8 / encode_width_bits + 1;
+        block_size = adpcm_align_block_size (block_size, num_channels, encode_width_bits, 0);
+        samples_per_block = adpcm_block_size_to_sample_count (block_size, num_channels, encode_width_bits);
 
         if (verbosity > 0)
             fprintf (stderr, "each %d byte ADPCM block will contain %d samples * %d channels\n",
@@ -594,13 +595,13 @@ static int write_adpcm_wav_header (FILE *outfile, int num_channels, int bps, uin
     FactHeader facthdr;
 
     int wavhdrsize = 20;
-    int block_size = ((samples_per_block - 1) * bps + 31) / 32 * num_channels * 4 + (num_channels * 4);
+    int block_size = adpcm_sample_count_to_block_size (samples_per_block, num_channels, bps);
     uint32_t num_blocks = num_samples / samples_per_block;
     int leftover_samples = num_samples % samples_per_block;
     uint32_t total_data_bytes = num_blocks * block_size;
 
     if (leftover_samples)
-        total_data_bytes += ((leftover_samples - 1) * bps + 31) / 32 * num_channels * 4 + (num_channels * 4);
+        total_data_bytes += adpcm_align_block_size (adpcm_sample_count_to_block_size (leftover_samples, num_channels, bps), num_channels, bps, 1);
 
     memset (&wavhdr, 0, sizeof (wavhdr));
 
@@ -642,7 +643,7 @@ static int write_adpcm_wav_header (FILE *outfile, int num_channels, int bps, uin
 
 static int adpcm_decode_data (FILE *infile, FILE *outfile, int num_channels, int bits_per_sample, uint32_t num_samples, int block_size)
 {
-    int samples_per_block = ((block_size - (num_channels * 4)) / num_channels * 8 / bits_per_sample) + 1, percent;
+    int samples_per_block = adpcm_block_size_to_sample_count (block_size, num_channels, bits_per_sample), percent;
     void *pcm_block = malloc (samples_per_block * num_channels * 2);
     void *adpcm_block = malloc (block_size);
     uint32_t progress_divider = 0;
@@ -663,9 +664,13 @@ static int adpcm_decode_data (FILE *infile, FILE *outfile, int num_channels, int
         int this_block_pcm_samples = samples_per_block;
 
         if (this_block_adpcm_samples > num_samples) {
-            block_size = ((num_samples - 1) * bits_per_sample + 31) / 32 * num_channels * 4 + (num_channels * 4);
-            this_block_adpcm_samples = ((block_size - (num_channels * 4)) / num_channels * 8 / bits_per_sample) + 1;
+            block_size = adpcm_sample_count_to_block_size (num_samples, num_channels, bits_per_sample);
+            this_block_adpcm_samples = adpcm_block_size_to_sample_count (block_size, num_channels, bits_per_sample);
             this_block_pcm_samples = num_samples;
+
+            if (verbosity > 0)
+                fprintf (stderr, "\rfinal block decodes %d (of %d) samples in %d-byte block\n",
+                    num_samples, this_block_adpcm_samples, block_size);
         }
 
         if (!fread (adpcm_block, block_size, 1, infile)) {
@@ -716,7 +721,7 @@ static int adpcm_decode_data (FILE *infile, FILE *outfile, int num_channels, int
 
 static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, int bps, uint32_t num_samples, int samples_per_block, int sample_rate)
 {
-    int block_size = ((samples_per_block - 1) * bps + 31) / 32 * num_channels * 4 + (num_channels * 4), percent;
+    int block_size = adpcm_sample_count_to_block_size (samples_per_block, num_channels, bps), percent;
     int16_t *pcm_block = malloc (samples_per_block * num_channels * 2);
     void *adpcm_block = malloc (block_size);
     uint32_t progress_divider = 0;
@@ -744,9 +749,13 @@ static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, int
         size_t num_bytes;
 
         if (this_block_pcm_samples > num_samples) {
-            block_size = ((num_samples - 1) * bps + 31) / 32 * num_channels * 4 + (num_channels * 4);
-            this_block_adpcm_samples = ((block_size - (num_channels * 4)) / num_channels * 8 / bps) + 1;
+            block_size = adpcm_align_block_size (adpcm_sample_count_to_block_size (num_samples, num_channels, bps), num_channels, bps, 1);
+            this_block_adpcm_samples = adpcm_block_size_to_sample_count (block_size, num_channels, bps);
             this_block_pcm_samples = num_samples;
+
+            if (verbosity > 0)
+                fprintf (stderr, "\rfinal block encodes %d (of %d) samples in %d-byte block\n",
+                    num_samples, this_block_adpcm_samples, block_size);
         }
 
         if (!fread (pcm_block, this_block_pcm_samples * num_channels * 2, 1, infile)) {
