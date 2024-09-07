@@ -39,13 +39,18 @@ extern "C" {
 int adpcm_sample_count_to_block_size (int sample_count, int num_chans, int bps);
 int adpcm_block_size_to_sample_count (int block_size, int num_chans, int bps);
 int adpcm_align_block_size (int block_size, int num_chans, int bps, int round_up);
-void *adpcm_create_context (int num_channels, int lookahead, int noise_shaping);
+void *adpcm_create_context (int num_channels, int sample_rate, int lookahead, int noise_shaping);
 void adpcm_set_shaping_weight (void *p, double shaping_weight);
 int adpcm_encode_block_ex (void *p, uint8_t *outbuf, size_t *outbufsize, const int16_t *inbuf, int inbufcount, int bps);
 int adpcm_encode_block (void *p, uint8_t *outbuf, size_t *outbufsize, const int16_t *inbuf, int inbufcount);
 int adpcm_decode_block_ex (int16_t *outbuf, const uint8_t *inbuf, size_t inbufsize, int channels, int bps);
 int adpcm_decode_block (int16_t *outbuf, const uint8_t *inbuf, size_t inbufsize, int channels);
 void adpcm_free_context (void *p);
+
+/* adpcm-dns.c */
+
+void generate_dns_values (const int16_t *samples, int sample_count, int num_chans, int sample_rate,
+    int16_t *values, int16_t min_value, int16_t last_value);
 
 #ifdef __cplusplus 
 }

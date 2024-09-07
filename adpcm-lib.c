@@ -45,6 +45,8 @@ else if ((data) < (min)) data = min;
 #define NIBBLE_TO_DELTA(b,n) ((n)<(1<<((b)-1))?(n)+1:(1<<((b)-1))-1-(n))
 #define DELTA_TO_NIBBLE(b,d) ((d)<0?(1<<((b)-1))-1-(d):(d)-1)
 
+#define NOISE_SHAPING_ENABLED   (NOISE_SHAPING_DYNAMIC | NOISE_SHAPING_STATIC)
+
 /* step table */
 static const uint16_t step_table[89] = {
     7, 8, 9, 10, 11, 12, 13, 14,
@@ -79,14 +81,14 @@ static const int index_table_5bit[] = {
 
 struct adpcm_channel {
     int32_t pcmdata;                        // current PCM value
-    int32_t error, weight, history [2];     // for noise shaping
-    int32_t shaping_weight;                 // for noise shaping
+    int32_t shaping_weight, error;          // for noise shaping
     int8_t index;                           // current index into step size table
 };
 
 struct adpcm_context {
     struct adpcm_channel channels [2];
-    int num_channels, config_flags;
+    int num_channels, sample_rate, config_flags;
+    int16_t *dynamic_shaping_array, last_shaping_weight;
     int static_shaping_weight;
 };
 
@@ -140,7 +142,7 @@ int adpcm_align_block_size (int block_size, int num_chans, int bps, int round_up
  * but also for the step table index at low search depths.
  */
 
-void *adpcm_create_context (int num_channels, int lookahead, int noise_shaping)
+void *adpcm_create_context (int num_channels, int sample_rate, int lookahead, int noise_shaping)
 {
     struct adpcm_context *pcnxt = malloc (sizeof (struct adpcm_context));
     int ch;
@@ -149,6 +151,7 @@ void *adpcm_create_context (int num_channels, int lookahead, int noise_shaping)
     pcnxt->config_flags = noise_shaping | lookahead;
     pcnxt->static_shaping_weight = 1024;
     pcnxt->num_channels = num_channels;
+    pcnxt->sample_rate = sample_rate;
 
     // we set the indicies to invalid values so that we always recalculate them
     // on at least the first frame (and every frame if the depth is sufficient)
@@ -270,7 +273,7 @@ static rms_error_t min_error_4bit (const struct adpcm_channel *pchan, int nch, i
     chan.index += index_table[nibble & 0x07];
     CLIP(chan.index, 0, 88);
 
-    if (flags & (NOISE_SHAPING_DYNAMIC | NOISE_SHAPING_STATIC)) {
+    if (flags & NOISE_SHAPING_ENABLED) {
         chan.error += chan.pcmdata;
         csample2 = noise_shape (&chan, psample [nch]);
     }
@@ -319,7 +322,7 @@ static rms_error_t min_error_4bit (const struct adpcm_channel *pchan, int nch, i
                 chan.index += index_table[testnbl & 0x07];
                 CLIP(chan.index, 0, 88);
 
-                if (flags & (NOISE_SHAPING_DYNAMIC | NOISE_SHAPING_STATIC)) {
+                if (flags & NOISE_SHAPING_ENABLED) {
                     chan.error += chan.pcmdata;
                     csample2 = noise_shape (&chan, psample [nch]);
                 }
@@ -373,7 +376,7 @@ static rms_error_t min_error_2bit (const struct adpcm_channel *pchan, int nch, i
     chan.index += (nibble & 1) * 3 - 1;
     CLIP(chan.index, 0, 88);
 
-    if (flags & (NOISE_SHAPING_DYNAMIC | NOISE_SHAPING_STATIC)) {
+    if (flags & NOISE_SHAPING_ENABLED) {
         chan.error += chan.pcmdata;
         csample2 = noise_shape (&chan, psample [nch]);
     }
@@ -411,7 +414,7 @@ static rms_error_t min_error_2bit (const struct adpcm_channel *pchan, int nch, i
             chan.index += (testnbl & 1) * 3 - 1;
             CLIP(chan.index, 0, 88);
 
-            if (flags & (NOISE_SHAPING_DYNAMIC | NOISE_SHAPING_STATIC)) {
+            if (flags & NOISE_SHAPING_ENABLED) {
                 chan.error += chan.pcmdata;
                 csample2 = noise_shape (&chan, psample [nch]);
             }
@@ -469,7 +472,7 @@ static rms_error_t min_error_3bit (const struct adpcm_channel *pchan, int nch, i
     chan.index += index_table_3bit[nibble & 0x03];
     CLIP(chan.index, 0, 88);
 
-    if (flags & (NOISE_SHAPING_DYNAMIC | NOISE_SHAPING_STATIC)) {
+    if (flags & NOISE_SHAPING_ENABLED) {
         chan.error += chan.pcmdata;
         csample2 = noise_shape (&chan, psample [nch]);
     }
@@ -516,7 +519,7 @@ static rms_error_t min_error_3bit (const struct adpcm_channel *pchan, int nch, i
                 chan.index += index_table_3bit[testnbl & 0x03];
                 CLIP(chan.index, 0, 88);
 
-                if (flags & (NOISE_SHAPING_DYNAMIC | NOISE_SHAPING_STATIC)) {
+                if (flags & NOISE_SHAPING_ENABLED) {
                     chan.error += chan.pcmdata;
                     csample2 = noise_shape (&chan, psample [nch]);
                 }
@@ -578,7 +581,7 @@ static rms_error_t min_error_5bit (const struct adpcm_channel *pchan, int nch, i
     chan.index += index_table_5bit[nibble & 0x0f];
     CLIP(chan.index, 0, 88);
 
-    if (flags & (NOISE_SHAPING_DYNAMIC | NOISE_SHAPING_STATIC)) {
+    if (flags & NOISE_SHAPING_ENABLED) {
         chan.error += chan.pcmdata;
         csample2 = noise_shape (&chan, psample [nch]);
     }
@@ -628,7 +631,7 @@ static rms_error_t min_error_5bit (const struct adpcm_channel *pchan, int nch, i
                 chan.index += index_table_5bit [testnbl & 0x0f];
                 CLIP(chan.index, 0, 88);
 
-                if (flags & (NOISE_SHAPING_DYNAMIC | NOISE_SHAPING_STATIC)) {
+                if (flags & NOISE_SHAPING_ENABLED) {
                     chan.error += chan.pcmdata;
                     csample2 = noise_shape (&chan, psample [nch]);
                 }
@@ -656,20 +659,7 @@ static uint8_t encode_sample (struct adpcm_context *pcnxt, int ch, int bps, cons
     int32_t csample = *psample;
     uint16_t trial_delta;
 
-    if (flags & NOISE_SHAPING_DYNAMIC) {
-        int32_t sam = (3 * pchan->history [0] - pchan->history [1]) >> 1;
-        int32_t temp = csample - (((pchan->weight * sam) + 512) >> 10);
-
-        if (sam && temp) pchan->weight -= (((sam ^ temp) >> 29) & 4) - 2;
-        pchan->history [1] = pchan->history [0];
-        pchan->history [0] = csample;
-
-        pchan->shaping_weight = (pchan->weight < 256) ? 1024 : 1536 - (pchan->weight * 2);
-    }
-    else if (flags & NOISE_SHAPING_STATIC)
-        pchan->shaping_weight = pcnxt->static_shaping_weight;
-
-    if (flags & (NOISE_SHAPING_DYNAMIC | NOISE_SHAPING_STATIC))
+    if (flags & NOISE_SHAPING_ENABLED)
         csample = noise_shape (pchan, csample); 
 
     if ((flags & LOOKAHEAD_DEPTH) > num_samples - 1)
@@ -712,7 +702,7 @@ static uint8_t encode_sample (struct adpcm_context *pcnxt, int ch, int bps, cons
 
         pchan->index += index_table[nibble & 0x07];
     }
-    else if (bps == 5) {
+    else {  // bps == 5
         min_error_5bit (pchan, pcnxt->num_channels, csample, psample, flags, &nibble, MAX_RMS_ERROR);
         trial_delta = (step >> 4);
         if (nibble & 1) trial_delta += (step >> 3);
@@ -731,7 +721,7 @@ static uint8_t encode_sample (struct adpcm_context *pcnxt, int ch, int bps, cons
     CLIP(pchan->index, 0, 88);
     CLIP(pchan->pcmdata, -32768, 32767);
 
-    if (flags & (NOISE_SHAPING_DYNAMIC | NOISE_SHAPING_STATIC))
+    if (flags & NOISE_SHAPING_ENABLED)
         pchan->error += pchan->pcmdata;
 
     return nibble;
@@ -745,9 +735,15 @@ static void encode_chunks (struct adpcm_context *pcnxt, uint8_t *outbuf, size_t 
     for (ch = 0; ch < pcnxt->num_channels; ++ch) {
         int shiftbits = 0, numbits = 0, i, j;
 
+        if (pcnxt->config_flags & NOISE_SHAPING_STATIC)
+            pcnxt->channels [ch].shaping_weight = pcnxt->static_shaping_weight;
+
         pcmbuf = inbuf + ch;
 
         for (j = i = 0; i < inbufcount; ++i) {
+            if (pcnxt->config_flags & NOISE_SHAPING_DYNAMIC)
+                pcnxt->channels [ch].shaping_weight = pcnxt->dynamic_shaping_array [i];
+
             shiftbits |= encode_sample (pcnxt, ch, bps, pcmbuf, inbufcount - i) << numbits;
             pcmbuf += pcnxt->num_channels;
 
@@ -864,10 +860,21 @@ int adpcm_encode_block_ex (void *p, uint8_t *outbuf, size_t *outbufsize, const i
         *outbufsize += 4;
     }
 
+    if (inbufcount && (pcnxt->config_flags & NOISE_SHAPING_DYNAMIC)) {
+        pcnxt->dynamic_shaping_array = malloc (inbufcount * sizeof (int16_t));
+        generate_dns_values (inbuf, inbufcount, pcnxt->num_channels, pcnxt->sample_rate, pcnxt->dynamic_shaping_array, -512, pcnxt->last_shaping_weight);
+        pcnxt->last_shaping_weight = pcnxt->dynamic_shaping_array [inbufcount - 1];
+    }
+
     // encode the rest of the PCM samples, if any, into 32-bit, possibly interleaved, chunks
 
     if (inbufcount)
         encode_chunks (pcnxt, outbuf, outbufsize, inbuf, inbufcount, bps);
+
+    if (pcnxt->dynamic_shaping_array && (pcnxt->config_flags & NOISE_SHAPING_DYNAMIC)) {
+        free (pcnxt->dynamic_shaping_array);
+        pcnxt->dynamic_shaping_array = NULL;
+    }
 
     return 1;
 }

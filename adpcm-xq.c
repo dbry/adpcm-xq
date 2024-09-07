@@ -801,7 +801,7 @@ static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, int
             else
                 noise_shaping = NOISE_SHAPING_OFF;
 
-            adpcm_cnxt = adpcm_create_context (num_channels, lookahead, noise_shaping);
+            adpcm_cnxt = adpcm_create_context (num_channels, sample_rate, lookahead, noise_shaping);
 
             if (noise_shaping == NOISE_SHAPING_STATIC)
                 adpcm_set_shaping_weight (adpcm_cnxt, static_shaping_weight);
