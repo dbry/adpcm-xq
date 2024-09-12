@@ -273,6 +273,8 @@ typedef struct {
 #define WAVE_FORMAT_IMA_ADPCM   0x11
 #define WAVE_FORMAT_EXTENSIBLE  0xfffe
 
+#define SNAP_NEAREST_POW2(v) { int d = 0; while ((v) & ((v) - 1)) (v) += (d = (~d >> 31 | 1) - d); }
+
 static int write_pcm_wav_header (FILE *outfile, int num_channels, uint32_t num_samples, uint32_t sample_rate);
 static int write_adpcm_wav_header (FILE *outfile, int num_channels, int bps, uint32_t num_samples, uint32_t sample_rate, int samples_per_block);
 static int adpcm_decode_data (FILE *infile, FILE *outfile, int num_channels, int bps, uint32_t num_samples, int block_size);
@@ -512,6 +514,7 @@ static int adpcm_converter (char *infilename, char *outfilename)
         else
             block_size = 256 * num_channels * (sample_rate < 11000 ? 1 : sample_rate / 11000);
 
+        SNAP_NEAREST_POW2 (block_size);     // for "middling" sample rates, snap to nearest power of two
         block_size = adpcm_align_block_size (block_size, num_channels, encode_width_bits, 0);
         samples_per_block = adpcm_block_size_to_sample_count (block_size, num_channels, encode_width_bits);
 
