@@ -820,13 +820,14 @@ static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, int
         if (flags & ADPCM_FLAG_MEASURE_NOISE) {
             int16_t *pcm_decoded = malloc (samples_per_block * num_channels * 2);
             double rms_noise [2] = { 0.0, 0.0 };
+            int i;
 
             if (adpcm_decode_block_ex (pcm_decoded, adpcm_block, block_size, num_channels, bps) != this_block_adpcm_samples) {
                 fprintf (stderr, "\radpcm_decode_block_ex() did not return expected value!\n");
                 return -1;
             }
 
-            for (int i = 0; i < this_block_pcm_samples * num_channels; i += num_channels) {
+            for (i = 0; i < this_block_pcm_samples * num_channels; i += num_channels) {
                 int32_t error = fabs (pcm_block [i] - pcm_decoded [i]);
 
                 if (error > max_error [0])
