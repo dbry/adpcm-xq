@@ -22,7 +22,7 @@
 #define IS_BIG_ENDIAN (*(uint16_t *)"\0\xff" < 0x0100)
 
 static const char *sign_on = "\n"
-" ADPCM-XQ   Xtreme Quality IMA-ADPCM WAV Encoder / Decoder   Version 0.4\n"
+" ADPCM-XQ   Xtreme Quality IMA-ADPCM WAV Encoder / Decoder   Version 0.5\n"
 " Copyright (c) 2024 David Bryant. All Rights Reserved.\n\n";
 
 static const char *usage =
