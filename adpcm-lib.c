@@ -812,7 +812,7 @@ int adpcm_encode_block_ex (void *p, uint8_t *outbuf, size_t *outbufsize, const i
         for (ch = 0; ch < pcnxt->num_channels; ch++) {
             rms_error_t min_error = MAX_RMS_ERROR;
             rms_error_t error_per_index [89];
-            int best_index, tindex;
+            int best_index = 0, tindex;
 
             for (tindex = 0; tindex <= 88; tindex++) {
                 struct adpcm_channel chan = pcnxt->channels [ch];
