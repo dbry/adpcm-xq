@@ -47,7 +47,7 @@ static void win_average_buffer (float *samples, int sample_count, int half_width
 void generate_dns_values (const int16_t *samples, int sample_count, int num_chans, int sample_rate,
     int16_t *values, int16_t min_value, int16_t last_value)
 {
-    float dB_offset = 1.3, dB_scaler = 100.0, max_dB, min_dB, max_ratio, min_ratio;
+    float dB_offset = 7.3, dB_scaler = 64.0, max_dB, min_dB, max_ratio, min_ratio;
     int filtered_count = sample_count - FILTER_LENGTH + 1, i;
     float *low_freq, *high_freq;
 
@@ -107,20 +107,6 @@ void generate_dns_values (const int16_t *samples, int sample_count, int num_chan
 
     win_average_buffer (low_freq, filtered_count, WINDOW_LENGTH >> 1);
     win_average_buffer (high_freq, filtered_count, WINDOW_LENGTH >> 1);
-
-    // Use the sample rate to calculate the desired offset:
-    //   <= 22,050 Hz: we use offset of -8.7 dB which means the noise-shaping matches
-    //                 the analysis results (i.e., white noise input gives zero shaping)
-    //   >= 44,100 Hz: we use offset of 1.3 dB which biases the shaping to the positive
-    //                 side (i.e., white noise input gives full positive shaping, -s1)
-    //   sampling rate values between 22-kHz and 44-kHz use an interpolated offset
-
-    if (sample_rate < 44100) {
-        if (sample_rate > 22050)
-            dB_offset -= (44100 - sample_rate) / 2205.0;
-        else
-            dB_offset -= 10.0;
-    }
 
     // calculate the minimum and maximum ratios that won't be clipped so that we only
     // have to compute the logarithm when needed
