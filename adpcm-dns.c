@@ -51,6 +51,8 @@ void generate_dns_values (const int16_t *samples, int sample_count, int num_chan
     int filtered_count = sample_count - FILTER_LENGTH + 1, i;
     float *low_freq, *high_freq;
 
+    (void) sample_rate; // unused.
+
     memset (values, 0, sample_count * sizeof (values [0]));
 
     if (filtered_count <= 0)
