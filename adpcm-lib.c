@@ -812,9 +812,9 @@ int adpcm_encode_block_ex (void *p, uint8_t *outbuf, size_t *outbufsize, const i
         for (ch = 0; ch < pcnxt->num_channels; ch++) {
             rms_error_t min_error = MAX_RMS_ERROR;
             rms_error_t error_per_index [89];
-            int best_index;
+            int best_index, tindex;
 
-            for (int tindex = 0; tindex <= 88; tindex++) {
+            for (tindex = 0; tindex <= 88; tindex++) {
                 struct adpcm_channel chan = pcnxt->channels [ch];
 
                 chan.index = tindex;
@@ -832,7 +832,7 @@ int adpcm_encode_block_ex (void *p, uint8_t *outbuf, size_t *outbufsize, const i
 
             // we use a 3-wide average window because the min_error_nbit() results can be noisy
 
-            for (int tindex = 0; tindex <= 87; tindex++) {
+            for (tindex = 0; tindex <= 87; tindex++) {
                 rms_error_t terror = error_per_index [tindex];
 
                 if (tindex)
