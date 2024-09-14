@@ -10,7 +10,7 @@ add_compile_options(-Wall)
 # add_compile_options(-Wextra)
 
 # define as library
-add_library (adpcm-lib adpcm-lib.c adpcm-dns.c)
+add_library (adpcm-lib STATIC adpcm-lib.c adpcm-dns.c)
 
 # build executable
 add_executable (adpcm-xq-exe adpcm-xq.c)
