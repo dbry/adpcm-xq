@@ -55,7 +55,7 @@ static int verbosity = 0, decode_only = 0, encode_only = 0, flags = ADPCM_FLAG_N
 static int lookahead = 3, blocksize_pow2 = 0, encode_width_bits = 4;
 static double static_shaping_weight = 0.0;
 
-int main (argc, argv) int argc; char **argv;
+int main (int argc, char **argv)
 {
     int overwrite = 0, asked_help = 0;
     char *infilename = NULL, *outfilename = NULL;
