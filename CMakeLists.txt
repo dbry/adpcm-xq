@@ -5,9 +5,11 @@ project(adpcm-xq)
 
 include(CheckLibraryExists)
 
+if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_C_COMPILER_ID MATCHES "Clang")
 # lots of warnings and all warnings as errors
-add_compile_options(-Wall)
+  add_compile_options(-Wall)
 # add_compile_options(-Wextra)
+endif()
 
 # define as library
 add_library (adpcm-lib STATIC adpcm-lib.c adpcm-dns.c)
