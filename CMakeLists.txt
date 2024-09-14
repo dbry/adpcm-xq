@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 # set the project name
-project(adpcm-xq)
+project(adpcm-xq LANGUAGES C)
 
 include(CheckLibraryExists)
 
@@ -27,4 +27,3 @@ endif()
 
 # define location for header files
 target_include_directories(adpcm-xq-exe PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} )
-
