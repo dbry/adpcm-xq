@@ -298,9 +298,9 @@ static rms_error_t min_error_4bit (const struct adpcm_channel *pchan, int nch, i
         // we execute this branch if:
         // 1. we're doing an exhaustive search, or
         // 2. the test value is one of the maximum values (i.e., 0x7 or 0xf), or
-        // 3. the test value's delta is within two of the initial estimate's delta
+        // 3. the test value's delta is within three of the initial estimate's delta
 
-        if (flags & LOOKAHEAD_EXHAUSTIVE || !(~testnbl & 0x7) || abs (NIBBLE_TO_DELTA (4,nibble) - NIBBLE_TO_DELTA (4,testnbl)) <= 2) {
+        if (flags & LOOKAHEAD_EXHAUSTIVE || !(~testnbl & 0x7) || abs (NIBBLE_TO_DELTA (4,nibble) - NIBBLE_TO_DELTA (4,testnbl)) <= 3) {
             trial_delta = (step >> 3);
             chan = *pchan;
 
@@ -605,10 +605,10 @@ static rms_error_t min_error_5bit (const struct adpcm_channel *pchan, int nch, i
 
         // we execute this trial if:
         // 1. we're doing an exhaustive search, or
-        // 2. the trial value is the maximum value for the sign (i.e., 0xf or 0x1f), or
+        // 2. the trial value is one of the four maximum values for the sign, or
         // 3. the test value's delta is within three of the initial estimate's delta
 
-        if (flags & LOOKAHEAD_EXHAUSTIVE || testnbl == (nibble | 0xf) || abs (NIBBLE_TO_DELTA (5,nibble) - NIBBLE_TO_DELTA (5,testnbl)) <= 3) {
+        if (flags & LOOKAHEAD_EXHAUSTIVE || (testnbl | 3) == (nibble | 0xf) || abs (NIBBLE_TO_DELTA (5,nibble) - NIBBLE_TO_DELTA (5,testnbl)) <= 3) {
             trial_delta = (step >> 4);
             chan = *pchan;
 
