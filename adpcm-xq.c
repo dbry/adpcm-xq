@@ -724,7 +724,7 @@ static int adpcm_decode_data (FILE *infile, FILE *outfile, int num_channels, int
 
 static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, int bps, uint32_t num_samples, int samples_per_block, int sample_rate)
 {
-    int block_size = adpcm_sample_count_to_block_size (samples_per_block, num_channels, bps), percent;
+    int block_size = adpcm_sample_count_to_block_size (samples_per_block, num_channels, bps), percent, noise_shaping;
     int16_t *pcm_block = malloc (samples_per_block * num_channels * 2);
     void *adpcm_block = malloc (block_size);
     uint32_t progress_divider = 0;
@@ -745,6 +745,29 @@ static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, int
         fprintf (stderr, "\rprogress: %d%% ", percent = 0);
         fflush (stderr);
     }
+
+    if (flags & ADPCM_FLAG_NOISE_SHAPING) {
+        if (static_shaping_weight != 0.0)
+            noise_shaping = NOISE_SHAPING_STATIC;
+        else if (sample_rate > 64000) {
+            noise_shaping = NOISE_SHAPING_STATIC;
+            static_shaping_weight = 1.0;
+        }
+        else
+            noise_shaping = NOISE_SHAPING_DYNAMIC;
+    }
+    else
+        noise_shaping = NOISE_SHAPING_OFF;
+
+    adpcm_cnxt = adpcm_create_context (num_channels, sample_rate, lookahead, noise_shaping);
+
+    if (!adpcm_cnxt) {
+        fprintf (stderr, "could not create ADPCM context!\n");
+        return -1;
+    }
+
+    if (noise_shaping == NOISE_SHAPING_STATIC)
+        adpcm_set_shaping_weight (adpcm_cnxt, static_shaping_weight);
 
     while (num_samples) {
         int this_block_adpcm_samples = samples_per_block;
@@ -786,28 +809,6 @@ static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, int
 
             while (dups--)
                 *dst++ = *src++;
-        }
-
-        if (!adpcm_cnxt) {
-            int noise_shaping;
-
-            if (flags & ADPCM_FLAG_NOISE_SHAPING) {
-                if (static_shaping_weight != 0.0)
-                    noise_shaping = NOISE_SHAPING_STATIC;
-                else if (sample_rate > 64000) {
-                    noise_shaping = NOISE_SHAPING_STATIC;
-                    static_shaping_weight = 1.0;
-                }
-                else
-                    noise_shaping = NOISE_SHAPING_DYNAMIC;
-            }
-            else
-                noise_shaping = NOISE_SHAPING_OFF;
-
-            adpcm_cnxt = adpcm_create_context (num_channels, sample_rate, lookahead, noise_shaping);
-
-            if (noise_shaping == NOISE_SHAPING_STATIC)
-                adpcm_set_shaping_weight (adpcm_cnxt, static_shaping_weight);
         }
 
         adpcm_encode_block_ex (adpcm_cnxt, adpcm_block, &num_bytes, pcm_block, this_block_adpcm_samples, bps);
@@ -903,9 +904,7 @@ static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, int
         }
     }
 
-    if (adpcm_cnxt)
-        adpcm_free_context (adpcm_cnxt);
-
+    adpcm_free_context (adpcm_cnxt);
     free (adpcm_block);
     free (pcm_block);
     return 0;
