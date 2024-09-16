@@ -115,6 +115,16 @@ int adpcm_block_size_to_sample_count (int block_size, int num_chans, int bps)
     return (block_size - num_chans * 4) / num_chans * 8 / bps + 1;
 }
 
+int adpcm_sample_count_to_block_size_no_header (int sample_count, int num_chans, int bps)
+{
+    return (sample_count * bps + 31) / 32 * num_chans * 4;
+}
+
+int adpcm_block_size_to_sample_count_no_header (int block_size, int num_chans, int bps)
+{
+    return block_size / num_chans * 8 / bps;
+}
+
 /* Convert an ADPCM block size (including header) to a (possibly) modified size that
  * is exactly bit-filled given the channel count and sample size (from 2 - 5 bits).
  * The round_up arg controls whether we round up or down to the next aligned value.
@@ -134,6 +144,15 @@ int adpcm_align_block_size (int block_size, int num_chans, int bps, int round_up
     return adpcm_sample_count_to_block_size (sample_count + 1, num_chans, bps);
 }
 
+int adpcm_align_block_size_no_header (int block_size, int num_chans, int bps, int round_up)
+{
+    int sample_count = adpcm_block_size_to_sample_count_no_header (block_size, num_chans, bps);
+    int sample_align = (bps & 1) ? 32 : 32 / bps;
+
+    sample_count = (sample_count + (sample_align - 1) * round_up) / sample_align * sample_align;
+    return adpcm_sample_count_to_block_size_no_header (sample_count, num_chans, bps);
+}
+
 /* Create ADPCM encoder context with given number of channels.
  * The returned pointer is used for subsequent calls. Note that
  * even though an ADPCM encoder could be set up to encode frames
@@ -142,13 +161,13 @@ int adpcm_align_block_size (int block_size, int num_chans, int bps, int round_up
  * but also for the step table index at low search depths.
  */
 
-void *adpcm_create_context (int num_channels, int sample_rate, int lookahead, int noise_shaping)
+void *adpcm_create_context (int num_channels, int sample_rate, int lookahead, int noise_shaping, int format)
 {
     struct adpcm_context *pcnxt = malloc (sizeof (struct adpcm_context));
     int ch;
 
     memset (pcnxt, 0, sizeof (struct adpcm_context));
-    pcnxt->config_flags = noise_shaping | lookahead;
+    pcnxt->config_flags = noise_shaping | lookahead | format;
     pcnxt->static_shaping_weight = 1024;
     pcnxt->num_channels = num_channels;
     pcnxt->sample_rate = sample_rate;
@@ -156,8 +175,9 @@ void *adpcm_create_context (int num_channels, int sample_rate, int lookahead, in
     // we set the indicies to invalid values so that we always recalculate them
     // on at least the first frame (and every frame if the depth is sufficient)
 
-    for (ch = 0; ch < num_channels; ++ch)
-        pcnxt->channels [ch].index = -1;
+    if (!(pcnxt->config_flags & FORMAT_NO_HEADERS))
+        for (ch = 0; ch < num_channels; ++ch)
+            pcnxt->channels [ch].index = -1;
 
     return pcnxt;
 }
@@ -791,73 +811,75 @@ int adpcm_encode_block_ex (void *p, uint8_t *outbuf, size_t *outbufsize, const i
     if (!inbufcount)
         return 1;
 
-    // The first PCM sample is encoded verbatim. In theory, we should apply the noise shaping,
-    // but we'll actually just apply the error term on the next sample.
+    if (!(pcnxt->config_flags & FORMAT_NO_HEADERS)) {
+        // The first PCM sample is encoded verbatim. In theory, we should apply the noise shaping,
+        // but we'll actually just apply the error term on the next sample.
 
-    for (ch = 0; ch < pcnxt->num_channels; ch++)
-        pcnxt->channels[ch].pcmdata = *inbuf++;
+        for (ch = 0; ch < pcnxt->num_channels; ch++)
+            pcnxt->channels[ch].pcmdata = *inbuf++;
 
-    inbufcount--;
+        inbufcount--;
 
-    // Use min_error_nbit() to find the optimum initial index if this is the first frame or
-    // the lookahead depth is at least 3. Below that just using the value leftover from
-    // the previous frame is better, and of course faster.
+        // Use min_error_nbit() to find the optimum initial index if this is the first frame or
+        // the lookahead depth is at least 3. Below that just using the value leftover from
+        // the previous frame is better, and of course faster.
 
-    if (inbufcount && (pcnxt->channels [0].index < 0 || (pcnxt->config_flags & LOOKAHEAD_DEPTH) >= 3)) {
-        int flags = 16 | LOOKAHEAD_NO_BRANCHING;
+        if (inbufcount && (pcnxt->channels [0].index < 0 || (pcnxt->config_flags & LOOKAHEAD_DEPTH) >= 3)) {
+            int flags = 16 | LOOKAHEAD_NO_BRANCHING;
 
-        if ((flags & LOOKAHEAD_DEPTH) > inbufcount - 1)
-            flags = (flags & ~LOOKAHEAD_DEPTH) + inbufcount - 1;
+            if ((flags & LOOKAHEAD_DEPTH) > inbufcount - 1)
+                flags = (flags & ~LOOKAHEAD_DEPTH) + inbufcount - 1;
+
+            for (ch = 0; ch < pcnxt->num_channels; ch++) {
+                rms_error_t min_error = MAX_RMS_ERROR;
+                rms_error_t error_per_index [89];
+                int best_index = 0, tindex;
+
+                for (tindex = 0; tindex <= 88; tindex++) {
+                    struct adpcm_channel chan = pcnxt->channels [ch];
+
+                    chan.index = tindex;
+                    chan.shaping_weight = 0;
+
+                    if (bps == 2)
+                        error_per_index [tindex] = min_error_2bit (&chan, pcnxt->num_channels, inbuf [ch], inbuf + ch, flags, NULL, MAX_RMS_ERROR);
+                    else if (bps == 3)
+                        error_per_index [tindex] = min_error_3bit (&chan, pcnxt->num_channels, inbuf [ch], inbuf + ch, flags, NULL, MAX_RMS_ERROR);
+                    else if (bps == 5)
+                        error_per_index [tindex] = min_error_5bit (&chan, pcnxt->num_channels, inbuf [ch], inbuf + ch, flags, NULL, MAX_RMS_ERROR);
+                    else
+                        error_per_index [tindex] = min_error_4bit (&chan, pcnxt->num_channels, inbuf [ch], inbuf + ch, flags, NULL, MAX_RMS_ERROR);
+                }
+
+                // we use a 3-wide average window because the min_error_nbit() results can be noisy
+
+                for (tindex = 0; tindex <= 87; tindex++) {
+                    rms_error_t terror = error_per_index [tindex];
+
+                    if (tindex)
+                        terror = (error_per_index [tindex - 1] + terror + error_per_index [tindex + 1]) / 3;
+
+                    if (terror < min_error) {
+                        best_index = tindex;
+                        min_error = terror;
+                    }
+                }
+
+                pcnxt->channels [ch].index = best_index;
+            }
+        }
+
+        // write the block header, which includes the first PCM sample verbatim
 
         for (ch = 0; ch < pcnxt->num_channels; ch++) {
-            rms_error_t min_error = MAX_RMS_ERROR;
-            rms_error_t error_per_index [89];
-            int best_index = 0, tindex;
+            outbuf[0] = pcnxt->channels[ch].pcmdata;
+            outbuf[1] = pcnxt->channels[ch].pcmdata >> 8;
+            outbuf[2] = pcnxt->channels[ch].index;
+            outbuf[3] = 0;
 
-            for (tindex = 0; tindex <= 88; tindex++) {
-                struct adpcm_channel chan = pcnxt->channels [ch];
-
-                chan.index = tindex;
-                chan.shaping_weight = 0;
-
-                if (bps == 2)
-                    error_per_index [tindex] = min_error_2bit (&chan, pcnxt->num_channels, inbuf [ch], inbuf + ch, flags, NULL, MAX_RMS_ERROR);
-                else if (bps == 3)
-                    error_per_index [tindex] = min_error_3bit (&chan, pcnxt->num_channels, inbuf [ch], inbuf + ch, flags, NULL, MAX_RMS_ERROR);
-                else if (bps == 5)
-                    error_per_index [tindex] = min_error_5bit (&chan, pcnxt->num_channels, inbuf [ch], inbuf + ch, flags, NULL, MAX_RMS_ERROR);
-                else
-                    error_per_index [tindex] = min_error_4bit (&chan, pcnxt->num_channels, inbuf [ch], inbuf + ch, flags, NULL, MAX_RMS_ERROR);
-            }
-
-            // we use a 3-wide average window because the min_error_nbit() results can be noisy
-
-            for (tindex = 0; tindex <= 87; tindex++) {
-                rms_error_t terror = error_per_index [tindex];
-
-                if (tindex)
-                    terror = (error_per_index [tindex - 1] + terror + error_per_index [tindex + 1]) / 3;
-
-                if (terror < min_error) {
-                    best_index = tindex;
-                    min_error = terror;
-                }
-            }
-
-            pcnxt->channels [ch].index = best_index;
+            outbuf += 4;
+            *outbufsize += 4;
         }
-    }
-
-    // write the block header, which includes the first PCM sample verbatim
-
-    for (ch = 0; ch < pcnxt->num_channels; ch++) {
-        outbuf[0] = pcnxt->channels[ch].pcmdata;
-        outbuf[1] = pcnxt->channels[ch].pcmdata >> 8;
-        outbuf[2] = pcnxt->channels[ch].index;
-        outbuf[3] = 0;
-
-        outbuf += 4;
-        *outbufsize += 4;
     }
 
     if (inbufcount && (pcnxt->config_flags & NOISE_SHAPING_DYNAMIC)) {
@@ -868,8 +890,16 @@ int adpcm_encode_block_ex (void *p, uint8_t *outbuf, size_t *outbufsize, const i
 
     // encode the rest of the PCM samples, if any, into 32-bit, possibly interleaved, chunks
 
-    if (inbufcount)
+    if (inbufcount) {
         encode_chunks (pcnxt, outbuf, outbufsize, inbuf, inbufcount, bps);
+
+        if ((pcnxt->config_flags & FORMAT_INTEL_DVI4) && bps == 4) {
+            int bytes_to_swap = inbufcount * pcnxt->num_channels / 2, i;
+
+            for (i = 0; i < bytes_to_swap; ++i)
+                outbuf [i] = (outbuf [i] << 4) | ((outbuf [i] >> 4) & 0xf);
+        }
+    }
 
     if (pcnxt->dynamic_shaping_array && (pcnxt->config_flags & NOISE_SHAPING_DYNAMIC)) {
         free (pcnxt->dynamic_shaping_array);
@@ -915,24 +945,35 @@ int adpcm_encode_block (void *p, uint8_t *outbuf, size_t *outbufsize, const int1
  * Returns number of converted composite samples (total samples divided by number of channels)
  */ 
 
-int adpcm_decode_block (int16_t *outbuf, const uint8_t *inbuf, size_t inbufsize, int channels)
+int adpcm_decode_block (void *p, int16_t *outbuf, const uint8_t *inbuf, size_t inbufsize, int channels)
 {
-    int ch, samples = 1, chunks;
+    struct adpcm_context *pcnxt = (struct adpcm_context *) p;
+    int ch, samples = 0, chunks;
     int32_t pcmdata[2];
     int8_t index[2];
 
     if (inbufsize < (uint32_t) channels * 4)
         return 0;
 
-    for (ch = 0; ch < channels; ch++) {
-        *outbuf++ = pcmdata[ch] = (int16_t) (inbuf [0] | (inbuf [1] << 8));
-        index[ch] = inbuf [2];
+    if (!pcnxt || !(pcnxt->config_flags & FORMAT_NO_HEADERS)) {
+        for (ch = 0; ch < channels; ch++) {
+            *outbuf++ = pcmdata[ch] = (int16_t) (inbuf [0] | (inbuf [1] << 8));
+            index[ch] = inbuf [2];
 
-        if (index [ch] < 0 || index [ch] > 88 || inbuf [3])     // sanitize the input a little...
-            return 0;
+            if (index [ch] < 0 || index [ch] > 88 || inbuf [3])     // sanitize the input a little...
+                return 0;
 
-        inbufsize -= 4;
-        inbuf += 4;
+            inbufsize -= 4;
+            inbuf += 4;
+        }
+
+        samples++;
+    }
+    else {
+        pcmdata [0] = pcnxt->channels [0].pcmdata;
+        pcmdata [1] = pcnxt->channels [1].pcmdata;
+        index [0] = pcnxt->channels [0].index;
+        index [1] = pcnxt->channels [1].index;
     }
 
     chunks = inbufsize / (channels * 4);
@@ -945,44 +986,53 @@ int adpcm_decode_block (int16_t *outbuf, const uint8_t *inbuf, size_t inbufsize,
 
             for (i = 0; i < 4; ++i) {
                 uint16_t step = step_table [index [ch]], delta = step >> 3;
+                uint8_t inbyte = *inbuf++;
 
-                if (*inbuf & 1) delta += (step >> 2);
-                if (*inbuf & 2) delta += (step >> 1);
-                if (*inbuf & 4) delta += step;
+                if (pcnxt && pcnxt->config_flags & FORMAT_INTEL_DVI4)
+                    inbyte = (inbyte << 4) | ((inbyte >> 4) & 0xf);
 
-                if (*inbuf & 8)
+                if (inbyte & 1) delta += (step >> 2);
+                if (inbyte & 2) delta += (step >> 1);
+                if (inbyte & 4) delta += step;
+
+                if (inbyte & 8)
                     pcmdata[ch] -= delta;
                 else
                     pcmdata[ch] += delta;
 
-                index[ch] += index_table [*inbuf & 0x7];
+                index[ch] += index_table [inbyte & 0x7];
                 CLIP(index[ch], 0, 88);
                 CLIP(pcmdata[ch], -32768, 32767);
                 outbuf [i * 2 * channels] = pcmdata[ch];
 
                 step = step_table [index [ch]]; delta = step >> 3;
 
-                if (*inbuf & 0x10) delta += (step >> 2);
-                if (*inbuf & 0x20) delta += (step >> 1);
-                if (*inbuf & 0x40) delta += step;
+                if (inbyte & 0x10) delta += (step >> 2);
+                if (inbyte & 0x20) delta += (step >> 1);
+                if (inbyte & 0x40) delta += step;
 
-                if (*inbuf & 0x80)
+                if (inbyte & 0x80)
                     pcmdata[ch] -= delta;
                 else
                     pcmdata[ch] += delta;
                 
-                index[ch] += index_table [(*inbuf >> 4) & 0x7];
+                index[ch] += index_table [(inbyte >> 4) & 0x7];
                 CLIP(index[ch], 0, 88);
                 CLIP(pcmdata[ch], -32768, 32767);
                 outbuf [(i * 2 + 1) * channels] = pcmdata[ch];
-
-                inbuf++;
             }
 
             outbuf++;
         }
 
         outbuf += channels * 7;
+    }
+
+    if (pcnxt && pcnxt->config_flags & FORMAT_NO_HEADERS) {
+        pcnxt->channels [0].pcmdata = pcmdata [0];
+        pcnxt->channels [1].pcmdata = pcmdata [1];
+        pcnxt->channels [0].index = index [0];
+        pcnxt->channels [1].index = index [1];
     }
 
     return samples;
@@ -1003,40 +1053,51 @@ int adpcm_decode_block (int16_t *outbuf, const uint8_t *inbuf, size_t inbufsize,
  * Returns number of converted composite samples (total samples divided by number of channels)
  */ 
 
-int adpcm_decode_block_ex (int16_t *outbuf, const uint8_t *inbuf, size_t inbufsize, int channels, int bps)
+int adpcm_decode_block_ex (void *p, int16_t *outbuf, const uint8_t *inbuf, size_t inbufsize, int channels, int bps)
 {
-    int samples = 1, ch;
+    struct adpcm_context *pcnxt = (struct adpcm_context *) p;
+    int samples = 0, ch;
     int32_t pcmdata[2];
     int8_t index[2];
 
     if (bps == 4)
-        return adpcm_decode_block (outbuf, inbuf, inbufsize, channels);
+        return adpcm_decode_block (p, outbuf, inbuf, inbufsize, channels);
 
     if (bps < 2 || bps > 5 || inbufsize < (uint32_t) channels * 4)
         return 0;
 
-    for (ch = 0; ch < channels; ch++) {
-        *outbuf++ = pcmdata[ch] = (int16_t) (inbuf [0] | (inbuf [1] << 8));
-        index[ch] = inbuf [2];
+    if (!pcnxt || !(pcnxt->config_flags & FORMAT_NO_HEADERS)) {
+        for (ch = 0; ch < channels; ch++) {
+            *outbuf++ = pcmdata[ch] = (int16_t) (inbuf [0] | (inbuf [1] << 8));
+            index[ch] = inbuf [2];
 
-        if (index [ch] < 0 || index [ch] > 88 || inbuf [3])     // sanitize the input a little...
-            return 0;
+            if (index [ch] < 0 || index [ch] > 88 || inbuf [3])     // sanitize the input a little...
+                return 0;
 
-        inbufsize -= 4;
-        inbuf += 4;
+            inbufsize -= 4;
+            inbuf += 4;
+        }
+
+        samples++;
+    }
+    else {
+        pcmdata [0] = pcnxt->channels [0].pcmdata;
+        pcmdata [1] = pcnxt->channels [1].pcmdata;
+        index [0] = pcnxt->channels [0].index;
+        index [1] = pcnxt->channels [1].index;
     }
 
     if (!inbufsize || (inbufsize % (channels * 4)))             // extra clean
         return samples;
 
-    samples += inbufsize / channels * 8 / bps;
+    samples = inbufsize / channels * 8 / bps;
 
     switch (bps) {
         case 2:
             for (ch = 0; ch < channels; ++ch) {
                 int shiftbits = 0, numbits = 0, i, j;
 
-                for (j = i = 0; i < samples - 1; ++i) {
+                for (j = i = 0; i < samples; ++i) {
                     uint16_t step = step_table [index [ch]];
 
                     if (numbits < bps) {
@@ -1066,7 +1127,7 @@ int adpcm_decode_block_ex (int16_t *outbuf, const uint8_t *inbuf, size_t inbufsi
             for (ch = 0; ch < channels; ++ch) {
                 int shiftbits = 0, numbits = 0, i, j;
 
-                for (j = i = 0; i < samples - 1; ++i) {
+                for (j = i = 0; i < samples; ++i) {
                     uint16_t step = step_table [index [ch]], delta = step >> 2;
 
                     if (numbits < bps) {
@@ -1099,7 +1160,7 @@ int adpcm_decode_block_ex (int16_t *outbuf, const uint8_t *inbuf, size_t inbufsi
             for (ch = 0; ch < channels; ++ch) {
                 int shiftbits = 0, numbits = 0, i, j;
 
-                for (j = i = 0; i < samples - 1; ++i) {
+                for (j = i = 0; i < samples; ++i) {
                     uint16_t step = step_table [index [ch]], delta = step >> 4;
 
                     if (numbits < bps) {
@@ -1134,5 +1195,13 @@ int adpcm_decode_block_ex (int16_t *outbuf, const uint8_t *inbuf, size_t inbufsi
             return 0;
     }
 
-    return samples;
+    if (pcnxt && pcnxt->config_flags & FORMAT_NO_HEADERS) {
+        pcnxt->channels [0].pcmdata = pcmdata [0];
+        pcnxt->channels [1].pcmdata = pcmdata [1];
+        pcnxt->channels [0].index = index [0];
+        pcnxt->channels [1].index = index [1];
+        return samples;
+    }
+    else
+        return samples + 1;
 }

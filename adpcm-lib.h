@@ -17,6 +17,9 @@
 #define LOOKAHEAD_EXHAUSTIVE    0x800   // full breadth of search (all branches taken)
 #define LOOKAHEAD_NO_BRANCHING  0x400   // no branches taken (internal use only!)
 
+#define FORMAT_INTEL_DVI4       0x1000  // Intel DVI4/ADP4 variant of IMA ADPCM (swapped nibbles)
+#define FORMAT_NO_HEADERS       0x2000  // no ADPCM headers or block breaks; just samples forever
+
 #if defined(_MSC_VER) && _MSC_VER < 1600
 typedef unsigned __int64 uint64_t;
 typedef unsigned __int32 uint32_t;
@@ -39,12 +42,15 @@ extern "C" {
 int adpcm_sample_count_to_block_size (int sample_count, int num_chans, int bps);
 int adpcm_block_size_to_sample_count (int block_size, int num_chans, int bps);
 int adpcm_align_block_size (int block_size, int num_chans, int bps, int round_up);
-void *adpcm_create_context (int num_channels, int sample_rate, int lookahead, int noise_shaping);
+int adpcm_sample_count_to_block_size_no_header (int sample_count, int num_chans, int bps);
+int adpcm_block_size_to_sample_count_no_header (int block_size, int num_chans, int bps);
+int adpcm_align_block_size_no_header (int block_size, int num_chans, int bps, int round_up);
+void *adpcm_create_context (int num_channels, int sample_rate, int lookahead, int noise_shaping, int format);
 void adpcm_set_shaping_weight (void *p, double shaping_weight);
 int adpcm_encode_block_ex (void *p, uint8_t *outbuf, size_t *outbufsize, const int16_t *inbuf, int inbufcount, int bps);
 int adpcm_encode_block (void *p, uint8_t *outbuf, size_t *outbufsize, const int16_t *inbuf, int inbufcount);
-int adpcm_decode_block_ex (int16_t *outbuf, const uint8_t *inbuf, size_t inbufsize, int channels, int bps);
-int adpcm_decode_block (int16_t *outbuf, const uint8_t *inbuf, size_t inbufsize, int channels);
+int adpcm_decode_block_ex (void *p, int16_t *outbuf, const uint8_t *inbuf, size_t inbufsize, int channels, int bps);
+int adpcm_decode_block (void *p, int16_t *outbuf, const uint8_t *inbuf, size_t inbufsize, int channels);
 void adpcm_free_context (void *p);
 
 /* adpcm-dns.c */

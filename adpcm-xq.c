@@ -22,7 +22,7 @@
 #define IS_BIG_ENDIAN (*(uint16_t *)"\0\xff" < 0x0100)
 
 static const char *sign_on = "\n"
-" ADPCM-XQ   Xtreme Quality IMA-ADPCM WAV Encoder / Decoder   Version 0.5\n"
+" ADPCM-XQ  Xtreme Quality IMA-ADPCM Encoder / Decoder  Experimental Version 0.5x\n"
 " Copyright (c) 2024 David Bryant. All Rights Reserved.\n\n";
 
 static const char *usage =
@@ -31,10 +31,12 @@ static const char *usage =
 "          (either encode 16-bit PCM to 4-bit IMA-ADPCM or decode back)\n\n"
 " Options:  -[0-16]= encode lookahead samples (default = 3, max = 16)\n"
 "           -b<n>  = override auto block size, 2^n bytes (n = 8-15)\n"
+"           -b0    = blockless / headerless output, raw (-r) mode only\n"
 "           -d     = decode only (fail on WAV file already PCM)\n"
 "           -e     = encode only (fail on WAV file already ADPCM)\n"
 "           -f     = encode flat noise (no noise shaping, aka -s0.0)\n"
 "           -h     = display this help message\n"
+"           -i     = Intel/DVI4/ADP4 output (raw blockless (-rb0) only)\n"
 "           -n     = measure and report quantization noise\n"
 "           -q     = quiet mode (display errors only)\n"
 "           -r     = raw output (little-endian, no WAV header written)\n"
@@ -48,6 +50,8 @@ static const char *usage =
 #define ADPCM_FLAG_NOISE_SHAPING    0x1
 #define ADPCM_FLAG_RAW_OUTPUT       0x2
 #define ADPCM_FLAG_MEASURE_NOISE    0x4
+#define ADPCM_FLAG_NO_HEADERS       0x8
+#define ADPCM_FLAG_INTEL_DVI4       0x10
 
 static double strtod_hexfree (const char *nptr, char **endptr);
 static int adpcm_converter (char *infilename, char *outfilename);
@@ -93,10 +97,13 @@ int main (int argc, char **argv)
                     case 'B': case 'b':
                         blocksize_pow2 = strtol (++*argv, argv, 10);
 
-                        if (blocksize_pow2 < 8 || blocksize_pow2 > 15) {
-                            fprintf (stderr, "\nblock size power must be 8 to 15!\n");
+                        if ((blocksize_pow2 && blocksize_pow2 < 8) || blocksize_pow2 > 15) {
+                            fprintf (stderr, "\nblock size power must be 0 (no blocks) or 8 to 15!\n");
                             return -1;
                         }
+
+                        if (!blocksize_pow2)
+                            flags |= ADPCM_FLAG_NO_HEADERS;
 
                         --*argv;
                         break;
@@ -116,6 +123,10 @@ int main (int argc, char **argv)
 
                     case 'H': case 'h':
                         asked_help = 0;
+                        break;
+
+                    case 'I': case 'i':
+                        flags |= ADPCM_FLAG_INTEL_DVI4;
                         break;
 
                     case 'N': case 'n':
@@ -191,6 +202,21 @@ int main (int argc, char **argv)
     if (!outfilename || asked_help) {
         printf ("%s", usage);
         return 0;
+    }
+
+    if ((flags & (ADPCM_FLAG_NO_HEADERS | ADPCM_FLAG_INTEL_DVI4)) && !(flags & ADPCM_FLAG_RAW_OUTPUT)) {
+        fprintf (stderr, "blockless mode (-b0) and Intel/DVI4 mode (-i) can only be used with raw mode (-r)\n");
+        return -1;
+    }
+
+    if ((flags & ADPCM_FLAG_INTEL_DVI4) && encode_width_bits != 4) {
+        fprintf (stderr, "Intel/DVI4 IMA mode can only be used with standard 4-bit width\n");
+        return -1;
+    }
+
+    if ((flags & ADPCM_FLAG_INTEL_DVI4) && !(flags & ADPCM_FLAG_NO_HEADERS)) {
+        fprintf (stderr, "Intel/DVI4 IMA mode can only be used with headerless mode (-b0)\n");
+        return -1;
     }
 
     if (!strcmp (infilename, outfilename)) {
@@ -509,18 +535,27 @@ static int adpcm_converter (char *infilename, char *outfilename)
     if (format == WAVE_FORMAT_PCM) {
         int block_size, samples_per_block;
 
-        if (blocksize_pow2)
+        if (flags & ADPCM_FLAG_NO_HEADERS)
+            block_size = 32768;
+        else if (blocksize_pow2)
             block_size = 1 << blocksize_pow2;
         else
             block_size = 256 * num_channels * (sample_rate < 11000 ? 1 : sample_rate / 11000);
 
         SNAP_NEAREST_POW2 (block_size);     // for "middling" sample rates, snap to nearest power of two
-        block_size = adpcm_align_block_size (block_size, num_channels, encode_width_bits, 0);
-        samples_per_block = adpcm_block_size_to_sample_count (block_size, num_channels, encode_width_bits);
+
+        if (flags & ADPCM_FLAG_NO_HEADERS) {
+            block_size = adpcm_align_block_size_no_header (block_size, num_channels, encode_width_bits, 0);
+            samples_per_block = adpcm_block_size_to_sample_count_no_header (block_size, num_channels, encode_width_bits);
+        }
+        else {
+            block_size = adpcm_align_block_size (block_size, num_channels, encode_width_bits, 0);
+            samples_per_block = adpcm_block_size_to_sample_count (block_size, num_channels, encode_width_bits);
+        }
 
         if (verbosity > 0)
-            fprintf (stderr, "each %d byte ADPCM block will contain %d samples * %d channels\n",
-                block_size, samples_per_block, num_channels);
+            fprintf (stderr, "each %d byte ADPCM block will contain %d %s samples\n",
+                block_size, samples_per_block, num_channels - 1 ? "stereo" : "mono");
 
         if (!(flags & ADPCM_FLAG_RAW_OUTPUT) && !write_adpcm_wav_header (outfile, num_channels, encode_width_bits, num_samples, sample_rate, samples_per_block)) {
             fprintf (stderr, "can't write header to file \"%s\" !\n", outfilename);
@@ -681,7 +716,7 @@ static int adpcm_decode_data (FILE *infile, FILE *outfile, int num_channels, int
             return -1;
         }
 
-        if (adpcm_decode_block_ex (pcm_block, adpcm_block, block_size, num_channels, bits_per_sample) != this_block_adpcm_samples) {
+        if (adpcm_decode_block_ex (NULL, pcm_block, adpcm_block, block_size, num_channels, bits_per_sample) != this_block_adpcm_samples) {
             fprintf (stderr, "adpcm_decode_block_ex() did not return expected value!\n");
             return -1;
         }
@@ -724,16 +759,24 @@ static int adpcm_decode_data (FILE *infile, FILE *outfile, int num_channels, int
 
 static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, int bps, uint32_t num_samples, int samples_per_block, int sample_rate)
 {
-    int block_size = adpcm_sample_count_to_block_size (samples_per_block, num_channels, bps), percent, noise_shaping;
-    int16_t *pcm_block = malloc (samples_per_block * num_channels * 2);
-    void *adpcm_block = malloc (block_size);
+    int block_size, percent, noise_shaping = NOISE_SHAPING_OFF, format = 0;
+    void *adpcm_cnxt, *adpcm_cnxt_decode = NULL;
     uint32_t progress_divider = 0;
-    void *adpcm_cnxt = NULL;
+    int16_t *pcm_block;
+    void *adpcm_block;
 
     double rms_noise_total [2] = { 0.0, 0.0 };
     double rms_noise_peak [2] = { 0.0, 0.0 };
     uint32_t max_error [2] = { 0, 0 };
     uint32_t noise_samples = 0;
+
+    if (flags & ADPCM_FLAG_NO_HEADERS)
+        block_size = adpcm_sample_count_to_block_size_no_header (samples_per_block, num_channels, bps);
+    else
+        block_size = adpcm_sample_count_to_block_size (samples_per_block, num_channels, bps);
+
+    pcm_block = malloc (samples_per_block * num_channels * 2);
+    adpcm_block = malloc (block_size);
 
     if (!pcm_block || !adpcm_block) {
         fprintf (stderr, "could not allocate memory for buffers!\n");
@@ -756,10 +799,17 @@ static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, int
         else
             noise_shaping = NOISE_SHAPING_DYNAMIC;
     }
-    else
-        noise_shaping = NOISE_SHAPING_OFF;
 
-    adpcm_cnxt = adpcm_create_context (num_channels, sample_rate, lookahead, noise_shaping);
+    if (flags & ADPCM_FLAG_NO_HEADERS)
+        format |= FORMAT_NO_HEADERS;
+
+    if (flags & ADPCM_FLAG_INTEL_DVI4)
+        format |= FORMAT_INTEL_DVI4;
+
+    adpcm_cnxt = adpcm_create_context (num_channels, sample_rate, lookahead, noise_shaping, format);
+
+    if ((flags & ADPCM_FLAG_MEASURE_NOISE) && format)
+        adpcm_cnxt_decode = adpcm_create_context (num_channels, 0, 0, 0, format);
 
     if (!adpcm_cnxt) {
         fprintf (stderr, "could not create ADPCM context!\n");
@@ -775,8 +825,15 @@ static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, int
         size_t num_bytes;
 
         if (this_block_pcm_samples > num_samples) {
-            block_size = adpcm_align_block_size (adpcm_sample_count_to_block_size (num_samples, num_channels, bps), num_channels, bps, 1);
-            this_block_adpcm_samples = adpcm_block_size_to_sample_count (block_size, num_channels, bps);
+            if (flags & ADPCM_FLAG_NO_HEADERS) {
+                block_size = adpcm_align_block_size_no_header (adpcm_sample_count_to_block_size_no_header (num_samples, num_channels, bps), num_channels, bps, 1);
+                this_block_adpcm_samples = adpcm_block_size_to_sample_count_no_header (block_size, num_channels, bps);
+            }
+            else {
+                block_size = adpcm_align_block_size (adpcm_sample_count_to_block_size (num_samples, num_channels, bps), num_channels, bps, 1);
+                this_block_adpcm_samples = adpcm_block_size_to_sample_count (block_size, num_channels, bps);
+            }
+
             this_block_pcm_samples = num_samples;
 
             if (verbosity > 0)
@@ -823,7 +880,7 @@ static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, int
             double rms_noise [2] = { 0.0, 0.0 };
             int i;
 
-            if (adpcm_decode_block_ex (pcm_decoded, adpcm_block, block_size, num_channels, bps) != this_block_adpcm_samples) {
+            if (adpcm_decode_block_ex (adpcm_cnxt_decode, pcm_decoded, adpcm_block, block_size, num_channels, bps) != this_block_adpcm_samples) {
                 fprintf (stderr, "\radpcm_decode_block_ex() did not return expected value!\n");
                 return -1;
             }
