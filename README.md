@@ -124,6 +124,10 @@ passed to the output file.
 - In some situations, at high lookahead levels, the operation can get very slow
 or even seem to be stuck, however this will happen at much higher lookahead depths
 than before. The default level 3 should always be fine and then the user can
-simply try increasing levels until the time becomes untenable.
+simply try increasing levels until the time becomes untenable. The new quantization
+noise option (**-n**) can be used to determine if higher levels are providing
+improvement (lower numbers are better). Note that the flat noise option (**-f**)
+will provide the lowest *measured* noise, but the default dynamic noise shaping
+may provide *less audible* noise.
 
 - Pipes are not yet supported.
