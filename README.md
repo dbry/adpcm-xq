@@ -66,7 +66,7 @@ divide the audio into blocks or frames of any kind. The decoding parameters are
 simply initialized to zero and the audio nibbles continue uninterrupted to the
 end of the clip. I have created an experimental version that will generate two
 variations of this data. One is standard nibble order and the other is reversed
-nibble order (sometimes called **Intel/DVI4** or ADP4 and is the format used in
+nibble order (sometimes called **Intel/DVI4** or **ADP4** and is the format used in
 AIFF files). These formats are only writable as "raw" by the **adpcm-xq** command-line
 program because they are not representable in WAV files, and they cannot
 be decoded by the program either (for the same reason), however the library
@@ -121,12 +121,9 @@ on MS Visual Studio:
 - Unknown RIFF chunk types are correctly parsed on input files, but are not
 passed to the output file.
 
-- The lookahead feature does not work for the last samples in an ADPCM
-block (i.e. it doesn't utilize samples in the _next_ block).
-
-- In some situations the lookahead can get very slow or seem to be stuck
-because it needs improved trellis pruning. However the default level 3
-should always be fine and then the user can simply try increasing levels
-until the time becomes untenable.
+- In some situations, at high lookahead levels, the operation can get very slow
+or even seem to be stuck, however this will happen at much higher lookahead depths
+than before. The default level 3 should always be fine and then the user can
+simply try increasing levels until the time becomes untenable.
 
 - Pipes are not yet supported.
