@@ -1,8 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
 
-# set macOS build options
-set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "" FORCE)
-
 # set the project name
 project(adpcm-xq LANGUAGES C)
 
