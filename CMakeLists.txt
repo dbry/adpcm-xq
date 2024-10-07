@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.0...3.5)
 
 # set the project name
 project(adpcm-xq LANGUAGES C)
