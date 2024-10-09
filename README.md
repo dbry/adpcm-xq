@@ -80,7 +80,7 @@ To build the command-line tool (**ADPCM-XQ**) on Linux:
 
 on Darwin/Mac:
 
-> $ clang -O3 *.c -lm -o adpcm-xq
+> $ cmake -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" . ; make
 
 on MS Visual Studio:
 
