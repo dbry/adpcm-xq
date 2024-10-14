@@ -666,7 +666,7 @@ static int adpcm_decode_data (FILE *infile, FILE *outfile, int num_channels, int
         int this_block_adpcm_samples = samples_per_block;
         int this_block_pcm_samples = samples_per_block;
 
-        if (this_block_adpcm_samples > num_samples) {
+        if (this_block_adpcm_samples > (int) num_samples) {
             block_size = adpcm_sample_count_to_block_size (num_samples, num_channels, bits_per_sample);
             this_block_adpcm_samples = adpcm_block_size_to_sample_count (block_size, num_channels, bits_per_sample);
             this_block_pcm_samples = num_samples;
@@ -732,7 +732,7 @@ static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, int
 
     double rms_noise_total [2] = { 0.0, 0.0 };
     double rms_noise_peak [2] = { 0.0, 0.0 };
-    uint32_t max_error [2] = { 0, 0 };
+    int32_t max_error [2] = { 0, 0 };
     uint32_t noise_samples = 0;
 
     if (!pcm_block || !adpcm_block) {
@@ -774,7 +774,7 @@ static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, int
         int this_block_pcm_samples = samples_per_block;
         size_t num_bytes;
 
-        if (this_block_pcm_samples > num_samples) {
+        if (this_block_pcm_samples > (int) num_samples) {
             block_size = adpcm_align_block_size (adpcm_sample_count_to_block_size (num_samples, num_channels, bps), num_channels, bps, 1);
             this_block_adpcm_samples = adpcm_block_size_to_sample_count (block_size, num_channels, bps);
             this_block_pcm_samples = num_samples;
@@ -813,7 +813,7 @@ static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, int
 
         adpcm_encode_block_ex (adpcm_cnxt, adpcm_block, &num_bytes, pcm_block, this_block_adpcm_samples, bps);
 
-        if (num_bytes != block_size) {
+        if ((int) num_bytes != block_size) {
             fprintf (stderr, "\radpcm_encode_block_ex() did not return expected value (expected %d, got %d)!\n", block_size, (int) num_bytes);
             return -1;
         }
@@ -829,7 +829,7 @@ static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, int
             }
 
             for (i = 0; i < this_block_pcm_samples * num_channels; i += num_channels) {
-                int32_t error = fabs (pcm_block [i] - pcm_decoded [i]);
+                int32_t error = abs (pcm_block [i] - pcm_decoded [i]);
 
                 if (error > max_error [0])
                     max_error [0] = error;
@@ -837,7 +837,7 @@ static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, int
                 rms_noise [0] += (double) error * error;
 
                 if (num_channels == 2) {
-                    error = fabs (pcm_block [i+1] - pcm_decoded [i+1]);
+                    error = abs (pcm_block [i+1] - pcm_decoded [i+1]);
 
                     if (error > max_error [1])
                         max_error [1] = error;
@@ -890,7 +890,7 @@ static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, int
 
             fprintf (stderr, "\n         Channel:    left      right \n");
             fprintf (stderr, "---------------------------------------\n");
-            fprintf (stderr, "Max Sample Error:  %6lu     %6lu\n", (unsigned long) max_error [0], (unsigned long) max_error [1]);
+            fprintf (stderr, "Max Sample Error:  %6ld     %6ld\n", (long) max_error [0], (long) max_error [1]);
             fprintf (stderr, " RMS Total Noise:  %6.2f dB  %6.2f dB\n", log10 (rms_noise_total [0]) * 10.0, log10 (rms_noise_total [1]) * 10.0);
             fprintf (stderr, "  RMS Peak Noise:  %6.2f dB  %6.2f dB\n\n", log10 (rms_noise_peak [0]) * 10.0, log10 (rms_noise_peak [1]) * 10.0);
         }
@@ -898,7 +898,7 @@ static int adpcm_encode_data (FILE *infile, FILE *outfile, int num_channels, int
             rms_noise_total [0] /= noise_samples * full_scale_rms;
             rms_noise_peak [0] /= full_scale_rms;
 
-            fprintf (stderr, "\nMax Sample Error:  %6lu\n", (unsigned long) max_error [0]);
+            fprintf (stderr, "\nMax Sample Error:  %6ld\n", (long) max_error [0]);
             fprintf (stderr, " RMS Total Noise:  %6.2f dB\n", log10 (rms_noise_total [0]) * 10.0);
             fprintf (stderr, "  RMS Peak Noise:  %6.2f dB\n\n", log10 (rms_noise_peak [0]) * 10.0);
         }
