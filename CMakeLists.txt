@@ -23,6 +23,8 @@ if(HAVE_LIBM)
   target_link_libraries(adpcm-lib m)
   target_link_libraries(adpcm-xq-exe adpcm-lib)
   target_link_libraries(adpcm-xq-exe m)
+else()
+  target_link_libraries(adpcm-xq-exe adpcm-lib)
 endif()
 
 # define location for header files
