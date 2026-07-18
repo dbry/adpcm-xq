@@ -917,7 +917,7 @@ int adpcm_encode_block (void *p, uint8_t *outbuf, size_t *outbufsize, const int1
 
 int adpcm_decode_block (int16_t *outbuf, const uint8_t *inbuf, size_t inbufsize, int channels)
 {
-    int ch, samples = 1, chunks;
+    int ch, samples = 0, chunks;
     int32_t pcmdata[2];
     int8_t index[2];
 
@@ -1005,7 +1005,7 @@ int adpcm_decode_block (int16_t *outbuf, const uint8_t *inbuf, size_t inbufsize,
 
 int adpcm_decode_block_ex (int16_t *outbuf, const uint8_t *inbuf, size_t inbufsize, int channels, int bps)
 {
-    int samples = 1, ch;
+    int samples = 0, ch;
     int32_t pcmdata[2];
     int8_t index[2];
 
